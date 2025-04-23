@@ -559,22 +559,7 @@ namespace AQMSDataUpdateLibrary
                 string paramValue = "NULL";
                 paramValue = "AVG(sd.Parametervalue)";
 
-                int typeIdValue = 2222;
-
-                // cmd.CommandText = $@"INSERT INTO {averageTableNameMonth} (StationID, DeviceID, ParameterID, Parametervalue, Type, Interval, LoggerFlags, TypeID, CreatedTime,ParameterIDRef)
-                //             SELECT a.StationID, a.DeviceID, a.ParameterID, a.Parametervalue, a.Type, a.Interval, a.LoggerFlags, a.TypeID, a.date,a.ParameterIDRef
-                //             FROM (
-                //                 SELECT StationID, DeviceID, ParameterID,ParameterIDRef, DATEADD({interval}, DATEDIFF({interval}, 0, sd.CreatedTime) / @Interval * @Interval, 0) AS Interval,
-                //                        {paramValue} AS Parametervalue, CAST(@Interval AS NVARCHAR(10)) + @IntervalType AS Type, {priorityLoggerflag} AS LoggerFlags,
-                //                       {typeIdValue} AS TypeID, GETDATE() AS date
-                //                 FROM {averageTableName} sd
-                //                 JOIN {flagTableName} f ON sd.LoggerFlags = f.ID and f.Type != 'Validation'
-                //                 WHERE sd.StationID = @StationID AND sd.DeviceID = @DeviceID AND sd.ParameterID = @ParameterID and f.ID=@priorityLoggerflag and sd.TypeID=1440
-                //                 GROUP BY StationID, DeviceID, ParameterID,ParameterIDRef, DATEADD({interval}, DATEDIFF({interval}, 0, sd.CreatedTime) / @Interval * @Interval, 0), LoggerFlags
-                //             ) a
-                //             LEFT JOIN {averageTableNameMonth} b ON a.Interval = b.Interval AND a.StationID = b.StationID AND a.DeviceID = b.DeviceID AND a.ParameterID = b.ParameterID AND b.TypeID = a.TypeID
-                //             WHERE b.id IS NULL AND a.Interval = @intervalValue";
-
+                int typeIdValue = 43200;
                 cmd.CommandText = $@"
                 INSERT INTO {averageTableNameMonth} (
                     StationID, DeviceID, ParameterID, Parametervalue, Type, Interval, LoggerFlags, TypeID, CreatedTime, ParameterIDRef
@@ -596,7 +581,7 @@ namespace AQMSDataUpdateLibrary
                         sd.DeviceID,
                         sd.ParameterID,
                         sd.ParameterIDRef,
-                        CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.CreatedTime), 0) AS DATETIME) AS Interval,
+                        CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.Interval), 0) AS DATETIME) AS Interval,
                         AVG(sd.Parametervalue) AS Parametervalue,
                         CAST(@Interval AS NVARCHAR(10)) + @IntervalType AS Type,
                         {priorityLoggerflag} AS LoggerFlags,
@@ -609,15 +594,104 @@ namespace AQMSDataUpdateLibrary
                         AND sd.ParameterID = @ParameterID
                         AND f.ID = @priorityLoggerflag
                         AND sd.TypeID = 1440
-                        AND sd.CreatedTime >= DATEADD(MONTH, DATEDIFF(MONTH, 0, GETDATE()), 0)  -- 1st of the month
+                      
                     GROUP BY 
                         sd.StationID,
                         sd.DeviceID,
                         sd.ParameterID,
                         sd.ParameterIDRef,
-                        CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.CreatedTime), 0) AS DATETIME)
+                        CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.Interval), 0) AS DATETIME)
                 ) a
                 LEFT JOIN {averageTableNameMonth} b 
+                    ON a.Interval = b.Interval 
+                    AND a.StationID = b.StationID 
+                    AND a.DeviceID = b.DeviceID 
+                    AND a.ParameterID = b.ParameterID 
+                    AND b.TypeID = a.TypeID
+                WHERE b.ID IS NULL;
+                ";
+
+
+                Log.Info("Query to Insert Parameter values into average table1: " + cmd.CommandText);
+                cmd.Parameters.Clear();
+                cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
+                cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceId"]));
+                cmd.Parameters.AddWithValue("@ParameterID", Convert.ToInt32(row["ID"]));
+                cmd.Parameters.AddWithValue("@Interval", intervalValue);
+                cmd.Parameters.AddWithValue("@IntervalType", intervalCode);
+                // cmd.Parameters.AddWithValue("@intervalValue", intraval);
+                if (priorityLoggerflag != 0)
+                    cmd.Parameters.AddWithValue("@priorityLoggerflag", priorityLoggerflag);
+                if (cmd.Connection.State != ConnectionState.Open)
+                {
+                    cmd.Connection.Open();
+                }
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                SqlConnection ConObj = new SqlConnection(sqlConnectionString);
+                WriteToLogTable(ConObj, ex.Message, "Exception");
+                Log.Error("InsertDataIntoAvgTable: ", ex);
+                if (ConObj != null)
+                {
+                    ConObj.Close();
+                    ConObj.Dispose();
+                }
+
+            }
+        }
+
+        private void InsertDataIntoAvgTableYear(SqlCommand cmd, DataRow row, string interval, int priorityLoggerflag, string intervalCode, string intervalValue, string sqlConnectionString)
+        {
+            try
+            {
+                string paramValue = "NULL";
+                paramValue = "AVG(sd.Parametervalue)";
+                int typeIdValue = 365;
+                cmd.CommandText = $@"
+                INSERT INTO {averageTableNameYear} (
+                    StationID, DeviceID, ParameterID, Parametervalue, Type, Interval, LoggerFlags, TypeID, CreatedTime, ParameterIDRef
+                )
+                SELECT 
+                    a.StationID,
+                    a.DeviceID,
+                    a.ParameterID,
+                    a.Parametervalue,
+                    a.Type,
+                    a.Interval,
+                    a.LoggerFlags,
+                    a.TypeID,
+                    GETDATE(),
+                    a.ParameterIDRef
+                FROM (
+                    SELECT 
+                        sd.StationID,
+                        sd.DeviceID,
+                        sd.ParameterID,
+                        sd.ParameterIDRef,
+                        CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, sd.Interval), 0) AS DATETIME) AS Interval,
+                        AVG(sd.Parametervalue) AS Parametervalue,
+                        CAST(@Interval AS NVARCHAR(10)) + @IntervalType AS Type,
+                        {priorityLoggerflag} AS LoggerFlags,
+                        {typeIdValue} AS TypeID
+                    FROM {averageTableNameMonth} sd
+                    JOIN {flagTableName} f ON sd.LoggerFlags = f.ID AND f.Type != 'Validation'
+                    WHERE 
+                        sd.StationID = @StationID
+                        AND sd.DeviceID = @DeviceID
+                        AND sd.ParameterID = @ParameterID
+                        AND f.ID = @priorityLoggerflag
+                        AND sd.TypeID = 43200
+                      
+                    GROUP BY 
+                        sd.StationID,
+                        sd.DeviceID,
+                        sd.ParameterID,
+                        sd.ParameterIDRef,
+                        CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, sd.Interval), 0) AS DATETIME)
+                ) a
+                LEFT JOIN {averageTableNameYear} b 
                     ON a.Interval = b.Interval 
                     AND a.StationID = b.StationID 
                     AND a.DeviceID = b.DeviceID 
@@ -1158,7 +1232,8 @@ namespace AQMSDataUpdateLibrary
             bool blnInsertStatus = InsertParameterAvgData(sqlConnectionString, defaultInterval);
             bool blnAQIInsertStatus = InsertAQIParameterAvgData(sqlConnectionString);
             bool blnMonthAverage = InsertParameterAvgDataMonth(sqlConnectionString);
-            bool blstatus = blnStatus && blnInsertStatus && blnAQIInsertStatus && blnMonthAverage;
+            bool blnYearAverage = InsertParameterAvgDataYear(sqlConnectionString);
+            bool blstatus = blnStatus && blnInsertStatus && blnAQIInsertStatus && blnMonthAverage && blnYearAverage;
             //bool blstatus = blnAQIInsertStatus;
             if (!blstatus)
                 ErrorLog.Error("There was some problem with transfer data. Please contact administrator");
@@ -1388,11 +1463,59 @@ namespace AQMSDataUpdateLibrary
                 SqlDataAdapter adapter = new SqlDataAdapter(cmd);
                 adapter.Fill(dt);
                 string interval = "Month";
-                string IntervalType = "MO";
+                string IntervalType = "-MO";
                 string intervalValue = "43200";
                 foreach (DataRow row in dt.Rows)
                 {
                     InsertDataIntoAvgTableMonth(cmd2, row, interval, 1, IntervalType, intervalValue, sqlConnectionString);
+                }
+                blnStatus = true;
+
+            }
+            catch (Exception ex)
+            {
+                //logObj.writeLog(ex.Message + "-" + ex.StackTrace + " : " + DateTime.Now.ToString(), filePath);
+                ErrorLog.Error("An error occured in InsertParameterAvgData", ex);
+                if (ConObj.State == ConnectionState.Open)
+                {
+                    WriteToLogTable(ConObj, ex.Message, "Exception Internal");
+                }
+            }
+            finally
+            {
+                if (ConObj != null)
+                {
+                    ConObj.Close();
+                    ConObj.Dispose();
+                }
+            }
+            return blnStatus;
+        }
+
+        public bool InsertParameterAvgDataYear(string sqlConnectionString)
+        {
+            Log logObj = new Log();
+            bool blnStatus = false;
+            SqlConnection ConObj = new SqlConnection(sqlConnectionString);
+
+            try
+            {
+                if (ConObj.State != ConnectionState.Open)
+                {
+                    ConObj.Open();
+                }
+                SqlCommand cmd = new SqlCommand($"SELECT p.*, d.DriverName AS ParameterDriverName FROM {parameterTableName} p inner join {driverTableName} d ON p.DriverID = d.ID", ConObj);
+                SqlCommand cmd1 = new SqlCommand(string.Empty, ConObj);
+                SqlCommand cmd2 = new SqlCommand(string.Empty, ConObj);
+                DataTable dt = new DataTable();
+                SqlDataAdapter adapter = new SqlDataAdapter(cmd);
+                adapter.Fill(dt);
+                string interval = "Year";
+                string IntervalType = "-Y";
+                string intervalValue = "365";
+                foreach (DataRow row in dt.Rows)
+                {
+                    InsertDataIntoAvgTableYear(cmd2, row, interval, 1, IntervalType, intervalValue, sqlConnectionString);
                 }
                 blnStatus = true;
 
