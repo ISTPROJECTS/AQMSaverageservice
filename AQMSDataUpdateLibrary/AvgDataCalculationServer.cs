@@ -554,78 +554,122 @@ namespace AQMSDataUpdateLibrary
 
         private void InsertDataIntoAvgTableMonth(SqlCommand cmd, DataRow row, string interval, int priorityLoggerflag, string intervalCode, string intervalValue, string sqlConnectionString)
         {
+           
             try
             {
-                string paramValue = "NULL";
-                paramValue = "AVG(sd.Parametervalue)";
-
                 int typeIdValue = 43200;
+
+                // ---------- UPDATE Query ----------
                 cmd.CommandText = $@"
-                INSERT INTO {averageTableNameMonth} (
-                    StationID, DeviceID, ParameterID, Parametervalue, Type, Interval, LoggerFlags, TypeID, CreatedTime, ParameterIDRef
-                )
-                SELECT 
-                    a.StationID,
-                    a.DeviceID,
-                    a.ParameterID,
-                    a.Parametervalue,
-                    a.Type,
-                    a.Interval,
-                    a.LoggerFlags,
-                    a.TypeID,
-                    GETDATE(),
-                    a.ParameterIDRef
-                FROM (
-                    SELECT 
-                        sd.StationID,
-                        sd.DeviceID,
-                        sd.ParameterID,
-                        sd.ParameterIDRef,
-                        CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.Interval), 0) AS DATETIME) AS Interval,
-                        AVG(sd.Parametervalue) AS Parametervalue,
-                        CAST(@Interval AS NVARCHAR(10)) + @IntervalType AS Type,
-                        {priorityLoggerflag} AS LoggerFlags,
-                        {typeIdValue} AS TypeID
-                    FROM {averageTableName} sd
-                    JOIN {flagTableName} f ON sd.LoggerFlags = f.ID AND f.Type != 'Validation'
-                    WHERE 
-                        sd.StationID = @StationID
-                        AND sd.DeviceID = @DeviceID
-                        AND sd.ParameterID = @ParameterID
-                        AND f.ID = @priorityLoggerflag
-                        AND sd.TypeID = 1440
-                      
-                    GROUP BY 
-                        sd.StationID,
-                        sd.DeviceID,
-                        sd.ParameterID,
-                        sd.ParameterIDRef,
-                        CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.Interval), 0) AS DATETIME)
-                ) a
-                LEFT JOIN {averageTableNameMonth} b 
-                    ON a.Interval = b.Interval 
-                    AND a.StationID = b.StationID 
-                    AND a.DeviceID = b.DeviceID 
-                    AND a.ParameterID = b.ParameterID 
-                    AND b.TypeID = a.TypeID
-                WHERE b.ID IS NULL;
-                ";
+        -- Update existing monthly average
+        UPDATE {averageTableNameMonth}
+        SET 
+            Parametervalue = monthlyAvg.AvgValue,
+            CreatedTime = GETDATE()
+        FROM (
+            SELECT 
+                sd.StationID,
+                sd.DeviceID,
+                sd.ParameterID,
+                CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.Interval), 0) AS DATETIME) AS MonthStart,
+                AVG(sd.Parametervalue) AS AvgValue
+            FROM {averageTableName} sd
+            JOIN {flagTableName} f ON sd.LoggerFlags = f.ID AND f.Type != 'Validation'
+            WHERE 
+                sd.StationID = @StationID
+                AND sd.DeviceID = @DeviceID
+                AND sd.ParameterID = @ParameterID
+                AND f.ID = @priorityLoggerflag
+                AND sd.TypeID = 1440
+            GROUP BY 
+                sd.StationID,
+                sd.DeviceID,
+                sd.ParameterID,
+                CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.Interval), 0) AS DATETIME)
+        ) monthlyAvg
+        WHERE 
+            {averageTableNameMonth}.StationID = monthlyAvg.StationID AND
+            {averageTableNameMonth}.DeviceID = monthlyAvg.DeviceID AND
+            {averageTableNameMonth}.ParameterID = monthlyAvg.ParameterID AND
+            {averageTableNameMonth}.Interval = monthlyAvg.MonthStart AND
+            {averageTableNameMonth}.TypeID = {typeIdValue};
+    ";
 
+                cmd.Parameters.Clear();
+                cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
+                cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceId"]));
+                cmd.Parameters.AddWithValue("@ParameterID", Convert.ToInt32(row["ID"]));
+                if (priorityLoggerflag != 0)
+                    cmd.Parameters.AddWithValue("@priorityLoggerflag", priorityLoggerflag);
 
-                Log.Info("Query to Insert Parameter values into average table1: " + cmd.CommandText);
+                if (cmd.Connection.State != ConnectionState.Open)
+                {
+                    cmd.Connection.Open();
+                }
+                cmd.ExecuteNonQuery();
+
+                // ---------- INSERT Query ----------
+                cmd.CommandText = $@"
+        INSERT INTO {averageTableNameMonth} (
+            StationID, DeviceID, ParameterID, Parametervalue, Type, Interval, LoggerFlags, TypeID, CreatedTime, ParameterIDRef
+        )
+        SELECT 
+            a.StationID,
+            a.DeviceID,
+            a.ParameterID,
+            a.Parametervalue,
+            a.Type,
+            a.Interval,
+            a.LoggerFlags,
+            a.TypeID,
+            GETDATE(),
+            a.ParameterIDRef
+        FROM (
+            SELECT 
+                sd.StationID,
+                sd.DeviceID,
+                sd.ParameterID,
+                sd.ParameterIDRef,
+                CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.Interval), 0) AS DATETIME) AS Interval,
+                AVG(sd.Parametervalue) AS Parametervalue,
+                CAST(@Interval AS NVARCHAR(10)) + @IntervalType AS Type,
+                {priorityLoggerflag} AS LoggerFlags,
+                {typeIdValue} AS TypeID
+            FROM {averageTableName} sd
+            JOIN {flagTableName} f ON sd.LoggerFlags = f.ID AND f.Type != 'Validation'
+            WHERE 
+                sd.StationID = @StationID
+                AND sd.DeviceID = @DeviceID
+                AND sd.ParameterID = @ParameterID
+                AND f.ID = @priorityLoggerflag
+                AND sd.TypeID = 1440
+            GROUP BY 
+                sd.StationID,
+                sd.DeviceID,
+                sd.ParameterID,
+                sd.ParameterIDRef,
+                CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.Interval), 0) AS DATETIME)
+        ) a
+        WHERE NOT EXISTS (
+            SELECT 1 FROM {averageTableNameMonth} b 
+            WHERE 
+                b.StationID = a.StationID AND 
+                b.DeviceID = a.DeviceID AND 
+                b.ParameterID = a.ParameterID AND 
+                b.Interval = a.Interval AND 
+                b.TypeID = a.TypeID
+        );
+    ";
+
                 cmd.Parameters.Clear();
                 cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
                 cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceId"]));
                 cmd.Parameters.AddWithValue("@ParameterID", Convert.ToInt32(row["ID"]));
                 cmd.Parameters.AddWithValue("@Interval", intervalValue);
                 cmd.Parameters.AddWithValue("@IntervalType", intervalCode);
-                // cmd.Parameters.AddWithValue("@intervalValue", intraval);
                 if (priorityLoggerflag != 0)
                     cmd.Parameters.AddWithValue("@priorityLoggerflag", priorityLoggerflag);
-                if (cmd.Connection.State != ConnectionState.Open)
-                {
-                    cmd.Connection.Open();
-                }
+
                 cmd.ExecuteNonQuery();
             }
             catch (Exception ex)
@@ -638,83 +682,127 @@ namespace AQMSDataUpdateLibrary
                     ConObj.Close();
                     ConObj.Dispose();
                 }
-
             }
+
         }
 
         private void InsertDataIntoAvgTableYear(SqlCommand cmd, DataRow row, string interval, int priorityLoggerflag, string intervalCode, string intervalValue, string sqlConnectionString)
         {
-            try
+             try
             {
-                string paramValue = "NULL";
-                paramValue = "AVG(sd.Parametervalue)";
                 int typeIdValue = 365;
+
+                // ---------- UPDATE Query ----------
                 cmd.CommandText = $@"
-                INSERT INTO {averageTableNameYear} (
-                    StationID, DeviceID, ParameterID, Parametervalue, Type, Interval, LoggerFlags, TypeID, CreatedTime, ParameterIDRef
-                )
-                SELECT 
-                    a.StationID,
-                    a.DeviceID,
-                    a.ParameterID,
-                    a.Parametervalue,
-                    a.Type,
-                    a.Interval,
-                    a.LoggerFlags,
-                    a.TypeID,
-                    GETDATE(),
-                    a.ParameterIDRef
-                FROM (
-                    SELECT 
-                        sd.StationID,
-                        sd.DeviceID,
-                        sd.ParameterID,
-                        sd.ParameterIDRef,
-                        CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, sd.Interval), 0) AS DATETIME) AS Interval,
-                        AVG(sd.Parametervalue) AS Parametervalue,
-                        CAST(@Interval AS NVARCHAR(10)) + @IntervalType AS Type,
-                        {priorityLoggerflag} AS LoggerFlags,
-                        {typeIdValue} AS TypeID
-                    FROM {averageTableNameMonth} sd
-                    JOIN {flagTableName} f ON sd.LoggerFlags = f.ID AND f.Type != 'Validation'
-                    WHERE 
-                        sd.StationID = @StationID
-                        AND sd.DeviceID = @DeviceID
-                        AND sd.ParameterID = @ParameterID
-                        AND f.ID = @priorityLoggerflag
-                        AND sd.TypeID = 43200
-                      
-                    GROUP BY 
-                        sd.StationID,
-                        sd.DeviceID,
-                        sd.ParameterID,
-                        sd.ParameterIDRef,
-                        CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, sd.Interval), 0) AS DATETIME)
-                ) a
-                LEFT JOIN {averageTableNameYear} b 
-                    ON a.Interval = b.Interval 
-                    AND a.StationID = b.StationID 
-                    AND a.DeviceID = b.DeviceID 
-                    AND a.ParameterID = b.ParameterID 
-                    AND b.TypeID = a.TypeID
-                WHERE b.ID IS NULL;
-                ";
+        -- Update existing monthly average
+        UPDATE {averageTableNameYear}
+        SET 
+            Parametervalue = monthlyAvg.AvgValue,
+            CreatedTime = GETDATE()
+        FROM (
+            SELECT 
+                sd.StationID,
+                sd.DeviceID,
+                sd.ParameterID,
+                CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, sd.Interval), 0) AS DATETIME) AS MonthStart,
+                AVG(sd.Parametervalue) AS AvgValue
+            FROM {averageTableNameMonth} sd
+            JOIN {flagTableName} f ON sd.LoggerFlags = f.ID AND f.Type != 'Validation'
+            WHERE 
+                sd.StationID = @StationID
+                AND sd.DeviceID = @DeviceID
+                AND sd.ParameterID = @ParameterID
+                AND f.ID = @priorityLoggerflag
+                AND sd.TypeID = 43200
+            GROUP BY 
+                sd.StationID,
+                sd.DeviceID,
+                sd.ParameterID,
+                CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, sd.Interval), 0) AS DATETIME)
+        ) monthlyAvg
+        WHERE 
+            {averageTableNameYear}.StationID = monthlyAvg.StationID AND
+            {averageTableNameYear}.DeviceID = monthlyAvg.DeviceID AND
+            {averageTableNameYear}.ParameterID = monthlyAvg.ParameterID AND
+            {averageTableNameYear}.Interval = monthlyAvg.MonthStart AND
+            {averageTableNameYear}.TypeID = {typeIdValue};
+    ";
 
+                cmd.Parameters.Clear();
+                cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
+                cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceId"]));
+                cmd.Parameters.AddWithValue("@ParameterID", Convert.ToInt32(row["ID"]));
+                if (priorityLoggerflag != 0)
+                    cmd.Parameters.AddWithValue("@priorityLoggerflag", priorityLoggerflag);
 
-                Log.Info("Query to Insert Parameter values into average table1: " + cmd.CommandText);
+                if (cmd.Connection.State != ConnectionState.Open)
+                {
+                    cmd.Connection.Open();
+                }
+                cmd.ExecuteNonQuery();
+
+                // ---------- INSERT Query ----------
+                cmd.CommandText = $@"
+        INSERT INTO {averageTableNameYear} (
+            StationID, DeviceID, ParameterID, Parametervalue, Type, Interval, LoggerFlags, TypeID, CreatedTime, ParameterIDRef
+        )
+        SELECT 
+            a.StationID,
+            a.DeviceID,
+            a.ParameterID,
+            a.Parametervalue,
+            a.Type,
+            a.Interval,
+            a.LoggerFlags,
+            a.TypeID,
+            GETDATE(),
+            a.ParameterIDRef
+        FROM (
+            SELECT 
+                sd.StationID,
+                sd.DeviceID,
+                sd.ParameterID,
+                sd.ParameterIDRef,
+                CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, sd.Interval), 0) AS DATETIME) AS Interval,
+                AVG(sd.Parametervalue) AS Parametervalue,
+                CAST(@Interval AS NVARCHAR(10)) + @IntervalType AS Type,
+                {priorityLoggerflag} AS LoggerFlags,
+                {typeIdValue} AS TypeID
+            FROM {averageTableNameMonth} sd
+            JOIN {flagTableName} f ON sd.LoggerFlags = f.ID AND f.Type != 'Validation'
+            WHERE 
+                sd.StationID = @StationID
+                AND sd.DeviceID = @DeviceID
+                AND sd.ParameterID = @ParameterID
+                AND f.ID = @priorityLoggerflag
+                AND sd.TypeID = 43200
+            GROUP BY 
+                sd.StationID,
+                sd.DeviceID,
+                sd.ParameterID,
+                sd.ParameterIDRef,
+                CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, sd.Interval), 0) AS DATETIME)
+        ) a
+        WHERE NOT EXISTS (
+            SELECT 1 FROM {averageTableNameYear} b 
+            WHERE 
+                b.StationID = a.StationID AND 
+                b.DeviceID = a.DeviceID AND 
+                b.ParameterID = a.ParameterID AND 
+                b.Interval = a.Interval AND 
+                b.TypeID = a.TypeID
+        );
+    ";
+
                 cmd.Parameters.Clear();
                 cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
                 cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceId"]));
                 cmd.Parameters.AddWithValue("@ParameterID", Convert.ToInt32(row["ID"]));
                 cmd.Parameters.AddWithValue("@Interval", intervalValue);
                 cmd.Parameters.AddWithValue("@IntervalType", intervalCode);
-                // cmd.Parameters.AddWithValue("@intervalValue", intraval);
                 if (priorityLoggerflag != 0)
                     cmd.Parameters.AddWithValue("@priorityLoggerflag", priorityLoggerflag);
-                if (cmd.Connection.State != ConnectionState.Open)
-                {
-                    cmd.Connection.Open();
-                }
+
                 cmd.ExecuteNonQuery();
             }
             catch (Exception ex)
@@ -727,8 +815,8 @@ namespace AQMSDataUpdateLibrary
                     ConObj.Close();
                     ConObj.Dispose();
                 }
-
             }
+
         }
 
         private DataTable GetUpdatedRecordsFromReadingsTable(SqlCommand cmd, DataRow row, DateTime? FormatInterval)
