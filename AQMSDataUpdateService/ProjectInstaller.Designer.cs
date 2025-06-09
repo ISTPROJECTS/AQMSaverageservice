@@ -40,8 +40,8 @@ namespace AQMSDataUpdateService
             // 
             // serviceInstaller1
             // 
-            this.serviceInstaller1.DisplayName = "ISTAQMSADPHCAServerAverageService";
-            this.serviceInstaller1.ServiceName = "ISTAQMSADPHCAServerAverageService";
+            this.serviceInstaller1.DisplayName = "ISTAQMSDOHServerAverageService";
+            this.serviceInstaller1.ServiceName = "ISTAQMSDOHServerAverageService";
             this.serviceInstaller1.StartType = System.ServiceProcess.ServiceStartMode.Automatic;
             // 
             // ProjectInstaller

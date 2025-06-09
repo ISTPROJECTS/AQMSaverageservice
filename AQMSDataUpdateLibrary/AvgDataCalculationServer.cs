@@ -836,7 +836,7 @@ namespace AQMSDataUpdateLibrary
         }
         private DataTable GetUpdatedRecordsFromReadingsTable(SqlConnection conObj)
         {
-            string commandText = $"select a.StationID,a.DeviceID,a.ParameterID as ID,a.ParameterID, a.CreatedTime, b.ServerAvgInterval,b.ParameterName,b.DataSyncFrequency,c.DriverName AS ParameterDriverName from {readingTableName} a inner join {parameterTableName} b on a.StationId=b.StationId and a.DeviceId=b.DeviceId and a.ParameterID=b.ID inner join {driverTableName} c ON b.DriverID = c.ID  where a.UpdateStatus = 1 order by CreatedTime desc";
+            string commandText = $"select a.StationID,a.DeviceID,a.ParameterID as ID,a.ParameterID, a.CreatedTime, b.ServerAvgInterval,b.ParameterName,b.DataSyncFrequency,c.DriverName AS ParameterDriverName from {readingTableName} a inner join {parameterTableName} b on a.StationId=b.StationId and a.DeviceId=b.DeviceId and a.ParameterID=b.ID inner join {driverTableName} c ON b.DriverID = c.ID  where a.UpdateStatus = 1 and b.ServerAvgInterval IS NOT NULL order by CreatedTime desc";
             Log.Info("Query to get the updated records from reading table: " + commandText);
             SqlCommand cmd = new SqlCommand(commandText, conObj);
             cmd.Parameters.Clear();
@@ -1316,11 +1316,11 @@ namespace AQMSDataUpdateLibrary
         public bool CalculateParameterAvgs(string sqlConnectionString)
         {
             Log.Info(sqlConnectionString);
-            bool blnStatus = UpdateParameterAveragesIfAny(sqlConnectionString);
             bool blnInsertStatus = InsertParameterAvgData(sqlConnectionString, defaultInterval);
             bool blnAQIInsertStatus = InsertAQIParameterAvgData(sqlConnectionString);
             bool blnMonthAverage = InsertParameterAvgDataMonth(sqlConnectionString);
             bool blnYearAverage = InsertParameterAvgDataYear(sqlConnectionString);
+            bool blnStatus = UpdateParameterAveragesIfAny(sqlConnectionString);
             bool blstatus = blnStatus && blnInsertStatus && blnAQIInsertStatus && blnMonthAverage && blnYearAverage;
             //bool blstatus = blnAQIInsertStatus;
             if (!blstatus)
@@ -1424,7 +1424,7 @@ namespace AQMSDataUpdateLibrary
                 }
                 InsertParameterSamplingsForCalculatedParameters(ConObj);
                 // SqlCommand cmd = new SqlCommand($"select  * from {parameterTableName}", ConObj);
-                SqlCommand cmd = new SqlCommand($"SELECT p.*, d.DriverName AS ParameterDriverName FROM {parameterTableName} p inner join {driverTableName} d ON p.DriverID = d.ID where d.DriverName != 'AQI Index'", ConObj);
+                SqlCommand cmd = new SqlCommand($"SELECT p.*, d.DriverName AS ParameterDriverName FROM {parameterTableName} p inner join {driverTableName} d ON p.DriverID = d.ID where d.DriverName != 'AQI Index' and p.ServerAvgInterval IS NOT NULL", ConObj);
 
                 DataTable dt = new DataTable();
                 SqlDataAdapter adapter = new SqlDataAdapter(cmd);
@@ -1639,7 +1639,7 @@ namespace AQMSDataUpdateLibrary
                 {
                     ConObj.Open();
                 }
-                SqlCommand cmd = new SqlCommand($"SELECT p.*, d.DriverName AS ParameterDriverName FROM {parameterTableName} p inner join {driverTableName} d ON p.DriverID = d.ID where d.DriverName='AQI Index'", ConObj);
+                SqlCommand cmd = new SqlCommand($"SELECT p.*, d.DriverName AS ParameterDriverName FROM {parameterTableName} p inner join {driverTableName} d ON p.DriverID = d.ID where d.DriverName='AQI Index' and p.ServerAvgInterval IS NOT NULL", ConObj);
                 DataTable dt = new DataTable();
                 SqlDataAdapter adapter = new SqlDataAdapter(cmd);
                 adapter.Fill(dt);
