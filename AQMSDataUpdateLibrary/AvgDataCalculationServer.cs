@@ -1,6 +1,9 @@
 ﻿using AQMSDataUpdateLibrary.Models;
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+
 using System.Collections.Specialized;
 using System.Configuration;
 using System.Data;
@@ -26,6 +29,8 @@ namespace AQMSDataUpdateLibrary
         string defaultInterval;
         string rain;
         string AQIParameters;
+
+        string maxParallelismdevices;
         NameValueCollection _appSettingsSection;
         private static readonly ILog Log = LogManager.GetLogger(typeof(AvgDataCalculationServer));
         private static readonly ILog ErrorLog = LogManager.GetLogger("error");
@@ -45,6 +50,7 @@ namespace AQMSDataUpdateLibrary
             rain = _appSettingsSection["rain"];
             defaultInterval = _appSettingsSection["defaultInterval"];
             AQIParameters = _appSettingsSection["AQIParameters"];
+            maxParallelismdevices = _appSettingsSection["maxParallelism"];
         }
 
         private DateTime? GetLatestIntervalRecordFromAvgTable(SqlCommand cmd, DataRow row, int pTypeId)
@@ -554,7 +560,7 @@ namespace AQMSDataUpdateLibrary
 
         private void InsertDataIntoAvgTableMonth(SqlCommand cmd, DataRow row, string interval, int priorityLoggerflag, string intervalCode, string intervalValue, string sqlConnectionString)
         {
-           
+
             try
             {
                 int typeIdValue = 43200;
@@ -688,7 +694,7 @@ namespace AQMSDataUpdateLibrary
 
         private void InsertDataIntoAvgTableYear(SqlCommand cmd, DataRow row, string interval, int priorityLoggerflag, string intervalCode, string intervalValue, string sqlConnectionString)
         {
-             try
+            try
             {
                 int typeIdValue = 365;
 
@@ -1316,17 +1322,80 @@ namespace AQMSDataUpdateLibrary
         public bool CalculateParameterAvgs(string sqlConnectionString)
         {
             Log.Info(sqlConnectionString);
-            bool blnInsertStatus = InsertParameterAvgData(sqlConnectionString, defaultInterval);
-            bool blnAQIInsertStatus = InsertAQIParameterAvgData(sqlConnectionString);
+
+            SqlConnection ConObj = new SqlConnection(sqlConnectionString);
+            if (ConObj.State != ConnectionState.Open)
+            {
+                ConObj.Open();
+            }
+
+            SqlCommand cmd = new SqlCommand("SELECT DeviceID FROM DMN_Devices;", ConObj);
+            DataTable dt = new DataTable();
+            SqlDataAdapter adapter = new SqlDataAdapter(cmd);
+            adapter.Fill(dt);
+
+            ConObj.Close(); // Close the connection early (safe, you're done reading device IDs)
+
+            int maxParallelism = Convert.ToInt32(maxParallelismdevices); // Store your parallel count here (can make it configurable)
+            SemaphoreSlim semaphore = new SemaphoreSlim(maxParallelism);
+
+            List<Task<bool>> tasks = new List<Task<bool>>();
+
+            foreach (DataRow row in dt.Rows)
+            {
+                var DeviceID = row["DeviceID"].ToString();
+
+                tasks.Add(Task.Run(async () =>
+                {
+                    await semaphore.WaitAsync(); // Acquire a slot
+                    try
+                    {
+                        bool blnInsertStatus = InsertParameterAvgData(sqlConnectionString, defaultInterval, DeviceID);
+                        bool blnAQIInsertStatus = InsertAQIParameterAvgData(sqlConnectionString, DeviceID);
+
+                        bool deviceSuccess = blnInsertStatus && blnAQIInsertStatus;
+
+                        if (!deviceSuccess)
+                        {
+                            ErrorLog.Error($"Failed to process averages for DeviceID: {DeviceID}");
+                        }
+                        else
+                        {
+                            Log.Info($"Successfully processed averages for DeviceID: {DeviceID}");
+                        }
+
+                        return deviceSuccess;
+                    }
+                    catch (Exception ex)
+                    {
+                        ErrorLog.Error($"Exception processing DeviceID {DeviceID}: {ex}");
+                        return false;
+                    }
+                    finally
+                    {
+                        semaphore.Release(); // Release the slot
+                    }
+                }));
+            }
+
+            Task.WaitAll(tasks.ToArray());
+
+            bool allDevicesSuccess = tasks.All(t => t.Result);
+
             bool blnMonthAverage = InsertParameterAvgDataMonth(sqlConnectionString);
             bool blnYearAverage = InsertParameterAvgDataYear(sqlConnectionString);
-            bool blnStatus = UpdateParameterAveragesIfAny(sqlConnectionString);
-            bool blstatus = blnStatus && blnInsertStatus && blnAQIInsertStatus && blnMonthAverage && blnYearAverage;
-            //bool blstatus = blnAQIInsertStatus;
-            if (!blstatus)
+
+            bool finalStatus = allDevicesSuccess && blnMonthAverage && blnYearAverage;
+
+            if (!finalStatus)
+            {
                 ErrorLog.Error("There was some problem with transfer data. Please contact administrator");
-            return blstatus;
+            }
+
+            return finalStatus;
         }
+
+
 
 
 
@@ -1411,7 +1480,7 @@ namespace AQMSDataUpdateLibrary
         }
 
 
-        public bool InsertParameterAvgData(string sqlConnectionString, string defaultInterval)
+        public bool InsertParameterAvgData(string sqlConnectionString, string defaultInterval, string DeviceID)
         {
             Log logObj = new Log();
             bool blnStatus = false;
@@ -1424,7 +1493,7 @@ namespace AQMSDataUpdateLibrary
                 }
                 InsertParameterSamplingsForCalculatedParameters(ConObj);
                 // SqlCommand cmd = new SqlCommand($"select  * from {parameterTableName}", ConObj);
-                SqlCommand cmd = new SqlCommand($"SELECT p.*, d.DriverName AS ParameterDriverName FROM {parameterTableName} p inner join {driverTableName} d ON p.DriverID = d.ID where d.DriverName != 'AQI Index' and p.ServerAvgInterval IS NOT NULL", ConObj);
+                SqlCommand cmd = new SqlCommand($"SELECT p.*, d.DriverName AS ParameterDriverName FROM {parameterTableName} p inner join {driverTableName} d ON p.DriverID = d.ID where d.DriverName != 'AQI Index' and p.ServerAvgInterval IS NOT NULL and p.DeviceID={DeviceID}", ConObj);
 
                 DataTable dt = new DataTable();
                 SqlDataAdapter adapter = new SqlDataAdapter(cmd);
@@ -1628,7 +1697,7 @@ namespace AQMSDataUpdateLibrary
             return blnStatus;
         }
 
-        public bool InsertAQIParameterAvgData(string sqlConnectionString)
+        public bool InsertAQIParameterAvgData(string sqlConnectionString, string DeviceID)
         {
             Log logObj = new Log();
             bool blnStatus = false;
@@ -1639,7 +1708,7 @@ namespace AQMSDataUpdateLibrary
                 {
                     ConObj.Open();
                 }
-                SqlCommand cmd = new SqlCommand($"SELECT p.*, d.DriverName AS ParameterDriverName FROM {parameterTableName} p inner join {driverTableName} d ON p.DriverID = d.ID where d.DriverName='AQI Index' and p.ServerAvgInterval IS NOT NULL", ConObj);
+                SqlCommand cmd = new SqlCommand($"SELECT p.*, d.DriverName AS ParameterDriverName FROM {parameterTableName} p inner join {driverTableName} d ON p.DriverID = d.ID where d.DriverName='AQI Index' and p.ServerAvgInterval IS NOT NULL and p.DeviceID={DeviceID}", ConObj);
                 DataTable dt = new DataTable();
                 SqlDataAdapter adapter = new SqlDataAdapter(cmd);
                 adapter.Fill(dt);
@@ -1703,9 +1772,9 @@ namespace AQMSDataUpdateLibrary
 
                                         // Check if each column exists before trying to parse
                                         pm10 = TryParseNullableDouble(Parametervalues, "PM10");
-                                        o3 = TryParseNullableDouble(Parametervalues, "O3");
+                                        o3 = TryParseNullableDouble(Parametervalues, "O₃");
                                         so2 = TryParseNullableDouble(Parametervalues, "SO2");
-                                        no2 = TryParseNullableDouble(Parametervalues, "NO2");
+                                        no2 = TryParseNullableDouble(Parametervalues, "NO₂");
                                         co = TryParseNullableDouble(Parametervalues, "CO");
                                         pm25 = TryParseNullableDouble(Parametervalues, "PM2.5");
                                         double? eightHourO3AQIValue;
