@@ -165,22 +165,23 @@ namespace AQMSDataUpdateLibrary
                 string[] AQIparameters = AQIParameters.Split(',');
                 string AQIParametersCondition = string.Join(",", AQIparameters.Select(d => $"'{d}'"));
                 cmd.CommandText = $@"
-        SELECT a.Interval, a.StationID, COUNT(a.Interval) AS TotReccnt 
+        SELECT a.Interval, a.StationID,a.DeviceID ,COUNT(a.Interval) AS TotReccnt 
         FROM (
             SELECT DISTINCT 
-                dateadd({interval}, datediff({interval}, 0, pa.Interval) / @Interval * @Interval, 0) AS Interval,pa.StationID
+                dateadd({interval}, datediff({interval}, 0, pa.Interval) / @Interval * @Interval, 0) AS Interval,pa.StationID,pa.DeviceID
             FROM {averageTableName} pa 
             INNER JOIN {parameterTableName} dp ON pa.ParameterID = dp.ID 
             INNER JOIN {driverTableName} d ON dp.DriverID = d.ID 
-            WHERE pa.StationID = @StationID AND pa.TypeID = @TypeID
+            WHERE pa.StationID = @StationID AND pa.TypeID = @TypeID AND pa.DeviceID=@DeviceID
                 AND d.DriverName IN ({AQIParametersCondition})
         ) a 
         WHERE a.Interval > @intervalValue
-        GROUP BY a.Interval,a.StationID
+        GROUP BY a.Interval,a.StationID,a.DeviceID
         ORDER BY a.Interval ASC";
 
                 cmd.Parameters.Clear();
                 cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
+                cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceId"]));
                 cmd.Parameters.AddWithValue("@TypeID", TypeID);
                 cmd.Parameters.AddWithValue("@Interval", intervalType);
 
@@ -221,10 +222,11 @@ namespace AQMSDataUpdateLibrary
             ELSE 1 END, 1) AS ConvertedParameterValue,  pa.Interval, u.UnitName AS ReportedUnit FROM  
     {averageTableName} pa INNER JOIN {parameterTableName} dp ON pa.ParameterID = dp.ID INNER JOIN {driverTableName} d ON dp.DriverID = d.ID 
     INNER JOIN ReportedUnits u ON dp.UnitID = u.ID LEFT JOIN Parameter_Conversion pc ON d.DriverName = pc.Parameter 
-    WHERE  pa.StationID = @StationID AND pa.Interval = @Interval AND pa.TypeID = @TypeID AND d.DriverName IN ({AQIParametersCondition})";
+    WHERE  pa.StationID = @StationID AND pa.Interval = @Interval AND pa.TypeID = @TypeID AND pa.DeviceID=@DeviceID AND d.DriverName IN ({AQIParametersCondition})";
 
                 cmd.Parameters.Clear();
                 cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
+                cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceID"]));
                 cmd.Parameters.AddWithValue("@Interval", row["Interval"]);
                 cmd.Parameters.AddWithValue("@TypeID", TypeID);
 
@@ -1782,11 +1784,11 @@ namespace AQMSDataUpdateLibrary
 
                                         if (o3 <= 200)
                                         {
-                                            aqio3 = CalculateEightHoursRollingAverageAQI(StationID, startTime, "8_O3", PtypeID, ConObj);
+                                            aqio3 = CalculateEightHoursRollingAverageAQI(StationID,DeviceID, startTime, "8_O3", PtypeID, ConObj);
                                         }
                                         else if (o3 > 200 && o3 <= 392)
                                         {
-                                            eightHourO3AQIValue = CalculateEightHoursRollingAverageAQI(StationID, startTime, "8_O3", PtypeID, ConObj);
+                                            eightHourO3AQIValue = CalculateEightHoursRollingAverageAQI(StationID, DeviceID,startTime, "8_O3", PtypeID, ConObj);
 
                                             oneHourO3AQIValue = CalculatePollutantAQIValues(o3, "1_O3");
 
@@ -1804,10 +1806,10 @@ namespace AQMSDataUpdateLibrary
                                             aqio3 = CalculatePollutantAQIValues(o3, "1_O3");
                                         }
 
-                                        aqico = CalculateEightHoursRollingAverageAQI(StationID, startTime, "8_CO", PtypeID, ConObj);
+                                        aqico = CalculateEightHoursRollingAverageAQI(StationID,DeviceID ,startTime, "8_CO", PtypeID, ConObj);
                                         aqino2 = CalculatePollutantAQIValues(no2, "1_NO2");
-                                        aqipm10 = CalculateTwentryFourHoursRollingAverage(StationID, startTime, "24_PM10", PtypeID, ConObj);
-                                        aqipm25 = CalculateTwentryFourHoursRollingAverage(StationID, startTime, "24_PM2.5", PtypeID, ConObj);
+                                        aqipm10 = CalculateTwentryFourHoursRollingAverage(StationID,DeviceID ,startTime, "24_PM10", PtypeID, ConObj);
+                                        aqipm25 = CalculateTwentryFourHoursRollingAverage(StationID,DeviceID, startTime, "24_PM2.5", PtypeID, ConObj);
 
                                         if (so2 <= 797)
                                         {
@@ -1815,7 +1817,7 @@ namespace AQMSDataUpdateLibrary
                                         }
                                         else
                                         {
-                                            aqiso2 = CalculateTwentryFourHoursRollingAverage(StationID, startTime, "24_SO2", PtypeID, ConObj);
+                                            aqiso2 = CalculateTwentryFourHoursRollingAverage(StationID,DeviceID, startTime, "24_SO2", PtypeID, ConObj);
                                         }
 
                                         double? aqi = null;
@@ -2148,7 +2150,7 @@ namespace AQMSDataUpdateLibrary
             return pollutantaqivalue;
         }
 
-        public double? CalculateEightHoursRollingAverageAQI(int StationID, DateTime Interval, string pollutantName, int TypeID, SqlConnection ConObj)
+        public double? CalculateEightHoursRollingAverageAQI(int StationID,string DeviceID, DateTime Interval, string pollutantName, int TypeID, SqlConnection ConObj)
         {
             double? eightHourAvgValue = 0.0;
             double? AQIValue = 0.0;
@@ -2163,10 +2165,11 @@ namespace AQMSDataUpdateLibrary
                 ELSE 1 END, 1) AS ConvertedParameterValue FROM  
         {averageTableName} pa INNER JOIN {parameterTableName} dp ON pa.ParameterID = dp.ID INNER JOIN {driverTableName} d ON dp.DriverID = d.ID 
         INNER JOIN ReportedUnits u ON dp.UnitID = u.ID LEFT JOIN Parameter_Conversion pc ON d.DriverName = pc.Parameter 
-    WHERE  pa.StationID = @StationID AND pa.Interval <= @Interval AND pa.Interval > @Interval2 AND pa.TypeID = @TypeID AND d.DriverName = @DriverName order by pa.Interval desc";
+    WHERE  pa.StationID = @StationID AND pa.DeviceID=@DeviceID AND pa.Interval <= @Interval AND pa.Interval > @Interval2 AND pa.TypeID = @TypeID AND d.DriverName = @DriverName order by pa.Interval desc";
 
                 cmd.Parameters.Clear();
                 cmd.Parameters.AddWithValue("@StationID", StationID);
+                cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(DeviceID));
                 cmd.Parameters.AddWithValue("@Interval", Interval);
                 cmd.Parameters.AddWithValue("@Interval2", Interval2);
                 cmd.Parameters.AddWithValue("@TypeID", TypeID);
@@ -2216,7 +2219,7 @@ namespace AQMSDataUpdateLibrary
             return AQIValue;
         }
 
-        public double? CalculateTwentryFourHoursRollingAverage(int StationID, DateTime Interval, string pollutantName, int TypeID, SqlConnection ConObj)
+        public double? CalculateTwentryFourHoursRollingAverage(int StationID, string DeviceID,DateTime Interval, string pollutantName, int TypeID, SqlConnection ConObj)
         {
             double? AQIValue = 0.0;
             double? twentyfourhourAvgValue = 0.0;
@@ -2232,10 +2235,11 @@ namespace AQMSDataUpdateLibrary
                 ELSE 1 END, 1) AS ConvertedParameterValue FROM  
         {averageTableName} pa INNER JOIN {parameterTableName} dp ON pa.ParameterID = dp.ID INNER JOIN {driverTableName} d ON dp.DriverID = d.ID 
         INNER JOIN ReportedUnits u ON dp.UnitID = u.ID LEFT JOIN Parameter_Conversion pc ON d.DriverName = pc.Parameter 
-    WHERE  pa.StationID = @StationID AND pa.Interval <= @Interval AND pa.Interval > @Interval2 AND pa.TypeID = @TypeID AND d.DriverName = @DriverName order by pa.Interval desc";
+    WHERE  pa.StationID = @StationID AND pa.DeviceID=@DeviceID AND pa.Interval <= @Interval AND pa.Interval > @Interval2 AND pa.TypeID = @TypeID AND d.DriverName = @DriverName order by pa.Interval desc";
 
                 cmd.Parameters.Clear();
                 cmd.Parameters.AddWithValue("@StationID", StationID);
+                cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(DeviceID));
                 cmd.Parameters.AddWithValue("@Interval", Interval);
                 cmd.Parameters.AddWithValue("@Interval2", Interval2);
                 cmd.Parameters.AddWithValue("@TypeID", TypeID);
