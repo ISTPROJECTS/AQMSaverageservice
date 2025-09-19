@@ -114,6 +114,11 @@
     <Content Include="obj\Debug\AQMSDataUpdateLibrary.pdb" />
   </ItemGroup>
   <ItemGroup>
+  <Reference Include="Npgsql">
+    <HintPath>..\packages\Npgsql.6.0.8\lib\net461\Npgsql.dll</HintPath>
+  </Reference>
+</ItemGroup>
+  <ItemGroup>
     <Folder Include="bin\Release\" />
     <Folder Include="obj\Debug\TempPE\" />
   </ItemGroup>
