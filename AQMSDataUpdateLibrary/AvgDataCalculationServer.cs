@@ -173,7 +173,7 @@ namespace AQMSDataUpdateLibrary
             INNER JOIN {parameterTableName} dp ON pa.ParameterID = dp.ID 
             INNER JOIN {driverTableName} d ON dp.DriverID = d.ID 
             WHERE pa.StationID = @StationID AND pa.TypeID = @TypeID AND pa.DeviceID=@DeviceID
-                AND d.DriverName IN ({AQIParametersCondition})
+                AND d.DriverName IN ({AQIParametersCondition}) AND dp.shouldUseForAqi=1
         ) a 
         WHERE a.Interval > @intervalValue
         GROUP BY a.Interval,a.StationID,a.DeviceID
@@ -222,7 +222,7 @@ namespace AQMSDataUpdateLibrary
             ELSE 1 END, 1) AS ConvertedParameterValue,  pa.Interval, u.UnitName AS ReportedUnit FROM  
     {averageTableName} pa INNER JOIN {parameterTableName} dp ON pa.ParameterID = dp.ID INNER JOIN {driverTableName} d ON dp.DriverID = d.ID 
     INNER JOIN ReportedUnits u ON dp.UnitID = u.ID LEFT JOIN Parameter_Conversion pc ON d.DriverName = pc.Parameter 
-    WHERE  pa.StationID = @StationID AND pa.Interval = @Interval AND pa.TypeID = @TypeID AND pa.DeviceID=@DeviceID AND d.DriverName IN ({AQIParametersCondition})";
+    WHERE  pa.StationID = @StationID AND pa.Interval = @Interval AND pa.TypeID = @TypeID AND pa.DeviceID=@DeviceID AND d.DriverName IN ({AQIParametersCondition}) AND dp.shouldUseForAqi=1";
 
                 cmd.Parameters.Clear();
                 cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
@@ -1775,7 +1775,7 @@ namespace AQMSDataUpdateLibrary
                                         // Check if each column exists before trying to parse
                                         pm10 = TryParseNullableDouble(Parametervalues, "PM10");
                                         o3 = TryParseNullableDouble(Parametervalues, "O₃");
-                                        so2 = TryParseNullableDouble(Parametervalues, "SO2");
+                                        so2 = TryParseNullableDouble(Parametervalues, "SO₂");
                                         no2 = TryParseNullableDouble(Parametervalues, "NO₂");
                                         co = TryParseNullableDouble(Parametervalues, "CO");
                                         pm25 = TryParseNullableDouble(Parametervalues, "PM2.5");
