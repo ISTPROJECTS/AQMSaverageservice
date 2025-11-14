@@ -126,37 +126,6 @@ namespace AQMSDataUpdateLibrary
             return dtCount;
         }
 
-        private DataTable GetRecordCountForEachIntervalAQI1(SqlCommand cmd, DataRow row, DateTime? formatInterval, string interval, string intervalType, int PtypeID)
-        {
-            DataTable dtCount = new DataTable();
-            try
-            {
-                cmd.CommandText = $"Select a.Interval,COUNT(a.Interval) as TotReccnt,AVG(a.Parametervalue) as Parameteravg from (SELECT dateadd({interval}, datediff({interval}, 0, sd.Interval) / @Interval * @Interval, 0) Interval,Parametervalue FROM {averageTableName}  sd where sd.StationID = @StationID and sd.DeviceID = @DeviceID and sd.ParameterID = @ParameterID ) a where a.Interval > @intervalValue group by a.Interval order by a.Interval asc";
-                cmd.Parameters.Clear();
-                cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
-                cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceId"]));
-                cmd.Parameters.AddWithValue("@ParameterID", Convert.ToInt32(row["ID"]));
-                cmd.Parameters.AddWithValue("@Interval", intervalType);
-                Log.Info("Query To fetch the number of records for each Interval:" + cmd.CommandText);
-                if (formatInterval == null)
-                    cmd.Parameters.AddWithValue("@intervalValue", string.Empty);
-                else
-                {
-                    cmd.Parameters.AddWithValue("@intervalValue", formatInterval);
-                    Log.Info("GetRecordCountForEachIntervalAQI1 Format InterVal Value : " + formatInterval.ToString());
-                }
-                using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
-                {
-                    adapter.Fill(dtCount);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error("Error in GetRecordCountForEachIntervalAQI1 : " + ex);
-            }
-            return dtCount;
-        }
-
         private DataTable GetRecordCountForEachIntervalAQI(SqlCommand cmd, DataRow row, DateTime? formatInterval, string interval, string intervalType, int TypeID)
         {
             DataTable dtCount = new DataTable();
@@ -219,7 +188,7 @@ namespace AQMSDataUpdateLibrary
                 string AQIParametersCondition = string.Join(",", AQIparameters.Select(d => $"'{d}'"));
                 cmd.CommandText = $@"
        SELECT d.DriverName, pa.ParameterValue * COALESCE(CASE WHEN u.UnitName <> pc.SecondaryUnit THEN TRY_CAST(pc.ConversionFactor AS FLOAT)
-            ELSE 1 END, 1) AS ConvertedParameterValue,  pa.Interval, u.UnitName AS ReportedUnit FROM  
+            ELSE 1 END, 1) AS ConvertedParameterValue,  pa.Interval, u.UnitName AS ReportedUnit,pa.ParameterID FROM  
     {averageTableName} pa INNER JOIN {parameterTableName} dp ON pa.ParameterID = dp.ID INNER JOIN {driverTableName} d ON dp.DriverID = d.ID 
     INNER JOIN ReportedUnits u ON dp.UnitID = u.ID LEFT JOIN Parameter_Conversion pc ON d.DriverName = pc.Parameter 
     WHERE  pa.StationID = @StationID AND pa.Interval = @Interval AND pa.TypeID = @TypeID AND pa.DeviceID=@DeviceID AND d.DriverName IN ({AQIParametersCondition}) AND dp.shouldUseForAqi=1";
@@ -229,6 +198,104 @@ namespace AQMSDataUpdateLibrary
                 cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceID"]));
                 cmd.Parameters.AddWithValue("@Interval", row["Interval"]);
                 cmd.Parameters.AddWithValue("@TypeID", TypeID);
+
+                Log.Info("Query To fetch the number of records for each Interval: " + cmd.CommandText);
+
+                using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
+                {
+                    adapter.Fill(dtCount);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Error in GetRecordCountForEachIntervalAQI: " + ex);
+            }
+            return dtCount;
+        }
+        private DataTable GetRecordCountForEachIntervalAQI1(SqlCommand cmd, DataRow row, DateTime? formatInterval, string interval, string intervalType, int PtypeID)
+        {
+            DataTable dtCount = new DataTable();
+            try
+            {
+                cmd.CommandText = $"Select a.Interval,COUNT(a.Interval) as TotReccnt,AVG(a.Parametervalue) as Parameteravg from (SELECT dateadd({interval}, datediff({interval}, 0, sd.Interval) / @Interval * @Interval, 0) Interval,Parametervalue FROM {averageTableName}  sd where sd.StationID = @StationID and sd.DeviceID = @DeviceID and sd.ParameterID = @ParameterID ) a where a.Interval > @intervalValue group by a.Interval order by a.Interval asc";
+                cmd.Parameters.Clear();
+                cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
+                cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceId"]));
+                cmd.Parameters.AddWithValue("@ParameterID", Convert.ToInt32(row["ID"]));
+                cmd.Parameters.AddWithValue("@Interval", intervalType);
+                Log.Info("Query To fetch the number of records for each Interval:" + cmd.CommandText);
+                if (formatInterval == null)
+                    cmd.Parameters.AddWithValue("@intervalValue", string.Empty);
+                else
+                {
+                    cmd.Parameters.AddWithValue("@intervalValue", formatInterval);
+                    Log.Info("GetRecordCountForEachIntervalAQI1 Format InterVal Value : " + formatInterval.ToString());
+                }
+                using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
+                {
+                    adapter.Fill(dtCount);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Error in GetRecordCountForEachIntervalAQI1 : " + ex);
+            }
+            return dtCount;
+        }
+
+        private DataTable GetSubindexAvgValue(SqlCommand cmd, DataRow row, DateTime? formatInterval, string interval, string intervalType, int TypeID)
+        {
+            DataTable dtCount = new DataTable();
+            try
+            {
+                string[] AQIparameters = AQIParameters.Split(',');
+                string AQIParametersCondition = string.Join(",", AQIparameters.Select(d => $"'{d}'"));
+                cmd.CommandText = $@"SELECT 
+    a.Interval,
+    a.DriverName,
+    COUNT(a.SubIndex) AS TotRecCnt,
+    AVG(a.SubIndex) AS SubIndex
+FROM 
+(
+    SELECT 
+        DATEADD(
+            {intervalType}, 
+            DATEDIFF({intervalType}, 0, pa.Interval) / @Interval * @Interval, 
+            0
+        ) AS Interval,
+        d.DriverName,
+        pa.SubIndex
+    FROM {averageTableName} pa
+    INNER JOIN {parameterTableName} dp ON pa.ParameterID = dp.ID
+    INNER JOIN {driverTableName} d ON dp.DriverID = d.ID
+    WHERE 
+        pa.StationID = @StationID
+        AND pa.DeviceID = @DeviceID
+        AND pa.TypeID = @TypeID
+        AND d.DriverName IN ({AQIParametersCondition})
+        AND dp.shouldUseForAqi = 1
+) a
+WHERE 
+    a.Interval > @intervalValue
+GROUP BY 
+    a.Interval,
+    a.DriverName
+ORDER BY 
+    a.Interval ASC,
+    a.DriverName ASC;
+";
+
+                cmd.Parameters.Clear();
+                cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
+                cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceID"]));
+                cmd.Parameters.AddWithValue("@Interval", intervalType);
+                if (formatInterval == null)
+                    cmd.Parameters.AddWithValue("@intervalValue", string.Empty);
+                else
+                {
+                    cmd.Parameters.AddWithValue("@intervalValue", formatInterval);
+                    Log.Info("GetRecordCountForEachIntervalAQI1 Format InterVal Value : " + formatInterval.ToString());
+                }
 
                 Log.Info("Query To fetch the number of records for each Interval: " + cmd.CommandText);
 
@@ -573,6 +640,7 @@ namespace AQMSDataUpdateLibrary
         UPDATE {averageTableNameMonth}
         SET 
             Parametervalue = monthlyAvg.AvgValue,
+            SubIndex = monthlyAvg.SubIndex,
             CreatedTime = GETDATE()
         FROM (
             SELECT 
@@ -580,6 +648,7 @@ namespace AQMSDataUpdateLibrary
                 sd.DeviceID,
                 sd.ParameterID,
                 CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.Interval), 0) AS DATETIME) AS MonthStart,
+                AVG(sd.SubIndex) AS SubIndex
                 AVG(sd.Parametervalue) AS AvgValue
             FROM {averageTableName} sd
             JOIN {flagTableName} f ON sd.LoggerFlags = f.ID AND f.Type != 'Validation'
@@ -619,13 +688,14 @@ namespace AQMSDataUpdateLibrary
                 // ---------- INSERT Query ----------
                 cmd.CommandText = $@"
         INSERT INTO {averageTableNameMonth} (
-            StationID, DeviceID, ParameterID, Parametervalue, Type, Interval, LoggerFlags, TypeID, CreatedTime, ParameterIDRef
+            StationID, DeviceID, ParameterID, Parametervalue,SubIndex,Type, Interval, LoggerFlags, TypeID, CreatedTime, ParameterIDRef
         )
         SELECT 
             a.StationID,
             a.DeviceID,
             a.ParameterID,
             a.Parametervalue,
+            a.SubIndex,
             a.Type,
             a.Interval,
             a.LoggerFlags,
@@ -640,6 +710,7 @@ namespace AQMSDataUpdateLibrary
                 sd.ParameterIDRef,
                 CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.Interval), 0) AS DATETIME) AS Interval,
                 AVG(sd.Parametervalue) AS Parametervalue,
+                AVG(sd.SubIndex) AS SubIndex,
                 CAST(@Interval AS NVARCHAR(10)) + @IntervalType AS Type,
                 {priorityLoggerflag} AS LoggerFlags,
                 {typeIdValue} AS TypeID
@@ -706,6 +777,7 @@ namespace AQMSDataUpdateLibrary
         UPDATE {averageTableNameYear}
         SET 
             Parametervalue = monthlyAvg.AvgValue,
+            SubIndex = monthlyAvg.SubIndex,
             CreatedTime = GETDATE()
         FROM (
             SELECT 
@@ -713,6 +785,7 @@ namespace AQMSDataUpdateLibrary
                 sd.DeviceID,
                 sd.ParameterID,
                 CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, sd.Interval), 0) AS DATETIME) AS MonthStart,
+                AVG(sd.SubIndex) AS SubIndex,
                 AVG(sd.Parametervalue) AS AvgValue
             FROM {averageTableNameMonth} sd
             JOIN {flagTableName} f ON sd.LoggerFlags = f.ID AND f.Type != 'Validation'
@@ -752,13 +825,14 @@ namespace AQMSDataUpdateLibrary
                 // ---------- INSERT Query ----------
                 cmd.CommandText = $@"
         INSERT INTO {averageTableNameYear} (
-            StationID, DeviceID, ParameterID, Parametervalue, Type, Interval, LoggerFlags, TypeID, CreatedTime, ParameterIDRef
+            StationID, DeviceID, ParameterID, Parametervalue,SubIndex, Type, Interval, LoggerFlags, TypeID, CreatedTime, ParameterIDRef
         )
         SELECT 
             a.StationID,
             a.DeviceID,
             a.ParameterID,
             a.Parametervalue,
+            a.SubIndex,
             a.Type,
             a.Interval,
             a.LoggerFlags,
@@ -773,6 +847,7 @@ namespace AQMSDataUpdateLibrary
                 sd.ParameterIDRef,
                 CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, sd.Interval), 0) AS DATETIME) AS Interval,
                 AVG(sd.Parametervalue) AS Parametervalue,
+                AVG(sd.SubIndex) AS SubIndex
                 CAST(@Interval AS NVARCHAR(10)) + @IntervalType AS Type,
                 {priorityLoggerflag} AS LoggerFlags,
                 {typeIdValue} AS TypeID
@@ -1719,6 +1794,7 @@ namespace AQMSDataUpdateLibrary
                 SqlCommand cmd3 = new SqlCommand(string.Empty, ConObj);
                 SqlCommand cmd4 = new SqlCommand(string.Empty, ConObj);
                 SqlCommand cmd5 = new SqlCommand(string.Empty, ConObj);
+                SqlCommand cmd6 = new SqlCommand(string.Empty, ConObj);
                 int intServerInterval = Convert.ToInt32(defaultInterval); //here 15 means in parameterreadings table 15 minutes data is there. so we are multiplying total records with 15
 
                 foreach (DataRow row in dt.Rows)
@@ -1779,16 +1855,29 @@ namespace AQMSDataUpdateLibrary
                                         no2 = TryParseNullableDouble(Parametervalues, "NO₂");
                                         co = TryParseNullableDouble(Parametervalues, "CO");
                                         pm25 = TryParseNullableDouble(Parametervalues, "PM2.5");
+
+
+                                        // get parameterID's of parameters
+                                        int? pm10id = GetParameterID(Parametervalues, "PM10");
+                                        int? o3id = GetParameterID(Parametervalues, "O₃");
+                                        int? so2id = GetParameterID(Parametervalues, "SO₂");
+                                        int? no2id = GetParameterID(Parametervalues, "NO₂");
+                                        int? coid = GetParameterID(Parametervalues, "CO");
+                                        int? pm25id = GetParameterID(Parametervalues, "PM2.5");
+
+
                                         double? eightHourO3AQIValue;
                                         double? oneHourO3AQIValue;
 
+                                        var aqio38H = CalculateEightHoursRollingAverageAQI(StationID, DeviceID, startTime, "8_O3", PtypeID, ConObj);
+
                                         if (o3 <= 200)
                                         {
-                                            aqio3 = CalculateEightHoursRollingAverageAQI(StationID,DeviceID, startTime, "8_O3", PtypeID, ConObj);
+                                            aqio3 = aqio38H.AQI;
                                         }
-                                        else if (o3 > 200 && o3 <= 392)
+                                        else if (o3 > 200 && aqio38H.EightHourAvg <= 392)
                                         {
-                                            eightHourO3AQIValue = CalculateEightHoursRollingAverageAQI(StationID, DeviceID,startTime, "8_O3", PtypeID, ConObj);
+                                            eightHourO3AQIValue = aqio38H.AQI;
 
                                             oneHourO3AQIValue = CalculatePollutantAQIValues(o3, "1_O3");
 
@@ -1801,15 +1890,16 @@ namespace AQMSDataUpdateLibrary
                                                 aqio3 = oneHourO3AQIValue;
                                             }
                                         }
-                                        else if (o3 > 392)
+                                        else if (aqio38H.EightHourAvg > 392)
                                         {
                                             aqio3 = CalculatePollutantAQIValues(o3, "1_O3");
                                         }
 
-                                        aqico = CalculateEightHoursRollingAverageAQI(StationID,DeviceID ,startTime, "8_CO", PtypeID, ConObj);
+                                        var aqicoobj = CalculateEightHoursRollingAverageAQI(StationID, DeviceID, startTime, "8_CO", PtypeID, ConObj);
+                                        aqico = aqicoobj.AQI;
                                         aqino2 = CalculatePollutantAQIValues(no2, "1_NO2");
-                                        aqipm10 = CalculateTwentryFourHoursRollingAverage(StationID,DeviceID ,startTime, "24_PM10", PtypeID, ConObj);
-                                        aqipm25 = CalculateTwentryFourHoursRollingAverage(StationID,DeviceID, startTime, "24_PM2.5", PtypeID, ConObj);
+                                        aqipm10 = CalculateTwentryFourHoursRollingAverage(StationID, DeviceID, startTime, "24_PM10", PtypeID, ConObj);
+                                        aqipm25 = CalculateTwentryFourHoursRollingAverage(StationID, DeviceID, startTime, "24_PM2.5", PtypeID, ConObj);
 
                                         if (so2 <= 797)
                                         {
@@ -1817,7 +1907,7 @@ namespace AQMSDataUpdateLibrary
                                         }
                                         else
                                         {
-                                            aqiso2 = CalculateTwentryFourHoursRollingAverage(StationID,DeviceID, startTime, "24_SO2", PtypeID, ConObj);
+                                            aqiso2 = CalculateTwentryFourHoursRollingAverage(StationID, DeviceID, startTime, "24_SO2", PtypeID, ConObj);
                                         }
 
                                         double? aqi = null;
@@ -1837,6 +1927,7 @@ namespace AQMSDataUpdateLibrary
                                             if (aqipm25 != null && aqipm25 > aqi) aqi = aqipm25;
                                         }
                                         InsertAQI(ConObj, row, startTime, PtypeID, aqi, StationID);
+                                        UpdateSubindex(ConObj, row, startTime, PtypeID, StationID, aqipm25, aqipm10, aqico, aqino2, aqiso2, aqio3, pm10id, o3id, so2id, no2id, coid, pm25id);
 
                                     }
                                 }
@@ -1878,7 +1969,34 @@ namespace AQMSDataUpdateLibrary
                                             parameterAvg = tempValue; // Set to parsed value if successful
                                         }
                                         InsertAQI(ConObj, row, startTime, PtypeID, parameterAvg, StationID);
+                                        DataTable Subindexvalues = GetSubindexAvgValue(cmd4, row, FormatInterval, interval, IntervalType[0], PtypeID);
+
+                                        double? aqipm10 = null;
+                                        double? aqio3 = null;
+                                        double? aqiso2 = null;
+                                        double? aqino2 = null;
+                                        double? aqico = null;
+                                        double? aqipm25 = null;
+
+                                        aqipm10 = GetSubindexValue(Subindexvalues, "PM10");
+                                        aqio3 = GetSubindexValue(Subindexvalues, "O₃");
+                                        aqiso2 = GetSubindexValue(Subindexvalues, "SO₂");
+                                        aqino2 = GetSubindexValue(Subindexvalues, "NO₂");
+                                        aqico = GetSubindexValue(Subindexvalues, "CO");
+                                        aqipm25 = GetSubindexValue(Subindexvalues, "PM2.5");
+
+
+                                        // get parameterID's of parameters
+                                        int? pm10id = GetParameterID(Subindexvalues, "PM10");
+                                        int? o3id = GetParameterID(Subindexvalues, "O₃");
+                                        int? so2id = GetParameterID(Subindexvalues, "SO₂");
+                                        int? no2id = GetParameterID(Subindexvalues, "NO₂");
+                                        int? coid = GetParameterID(Subindexvalues, "CO");
+                                        int? pm25id = GetParameterID(Subindexvalues, "PM2.5");
+
+                                        UpdateSubindex(ConObj, row, startTime, PtypeID, StationID, aqipm25, aqipm10, aqico, aqino2, aqiso2, aqio3, pm10id, o3id, so2id, no2id, coid, pm25id);
                                     }
+
                                 }
                             }
 
@@ -1939,6 +2057,63 @@ namespace AQMSDataUpdateLibrary
                 ErrorLog.Error("Error in InsertAQI", ex);
             }
         }
+
+
+        private void UpdateSubindex(
+    SqlConnection ConObj, DataRow row, DateTime startTime, int PtypeID, int StationID,
+    double? aqipm25, double? aqipm10, double? aqico, double? aqino2, double? aqiso2, double? aqio3,
+    int? pm10id, int? o3id, int? so2id, int? no2id, int? coid, int? pm25id)
+        {
+            try
+            {
+                string query = $@"UPDATE {averageTableName}
+                          SET SubIndex = @SubIndex
+                          WHERE StationID = @StationID
+                            AND DeviceID = @DeviceID
+                            AND ParameterID = @ParameterID
+                            AND Interval = @Interval
+                            AND TypeID = @TypeID";
+
+                using (SqlCommand cmd6 = new SqlCommand(query, ConObj))
+                {
+                    cmd6.Parameters.Add("@SubIndex", SqlDbType.Float);
+                    cmd6.Parameters.Add("@StationID", SqlDbType.Int);
+                    cmd6.Parameters.Add("@DeviceID", SqlDbType.Int);
+                    cmd6.Parameters.Add("@ParameterID", SqlDbType.Int);
+                    cmd6.Parameters.Add("@Interval", SqlDbType.DateTime);
+                    cmd6.Parameters.Add("@TypeID", SqlDbType.Int);
+
+                    cmd6.Parameters["@StationID"].Value = StationID;
+                    cmd6.Parameters["@DeviceID"].Value = Convert.ToInt32(row["DeviceID"]);
+                    cmd6.Parameters["@Interval"].Value = startTime;
+                    cmd6.Parameters["@TypeID"].Value = PtypeID;
+
+                    // Local helper method for each pollutant
+                    void UpdateValue(double? value, int? paramId)
+                    {
+                        if (paramId == null) return;
+
+                        cmd6.Parameters["@ParameterID"].Value = paramId;
+                        cmd6.Parameters["@SubIndex"].Value = value ?? (object)DBNull.Value;
+
+                        cmd6.ExecuteNonQuery();
+                    }
+
+                    // Update subindex values for each parameter
+                    UpdateValue(aqipm10, pm10id);
+                    UpdateValue(aqio3, o3id);
+                    UpdateValue(aqiso2, so2id);
+                    UpdateValue(aqino2, no2id);
+                    UpdateValue(aqico, coid);
+                    UpdateValue(aqipm25, pm25id);
+                }
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Error("Error in UpdateSubindex", ex);
+            }
+        }
+
         private double? TryParseNullableDouble(DataTable dt, string columnName)
         {
             string filterExpression = $@"DriverName = '{columnName}'"; // Define the filter expression
@@ -1949,6 +2124,44 @@ namespace AQMSDataUpdateLibrary
                 if (filteredRows[0]["DriverName"].ToString() == columnName && filteredRows[0]["ConvertedParameterValue"] != DBNull.Value)
                 {
                     if (double.TryParse(filteredRows[0]["ConvertedParameterValue"].ToString(), out double result))
+                    {
+                        return result;
+                    }
+                }
+            }
+            return null;
+        }
+
+
+        private double? GetSubindexValue(DataTable dt, string columnName)
+        {
+            string filterExpression = $@"DriverName = '{columnName}'"; // Define the filter expression
+            DataRow[] filteredRows = dt.Select(filterExpression);
+            if (filteredRows.Length > 0)
+            {
+
+                if (filteredRows[0]["DriverName"].ToString() == columnName && filteredRows[0]["ConvertedParameterValue"] != DBNull.Value)
+                {
+                    if (double.TryParse(filteredRows[0]["ConvertedParameterValue"].ToString(), out double result))
+                    {
+                        return result;
+                    }
+                }
+            }
+            return null;
+        }
+
+
+        private int? GetParameterID(DataTable dt, string columnName)
+        {
+            string filterExpression = $@"DriverName = '{columnName}'"; // Define the filter expression
+            DataRow[] filteredRows = dt.Select(filterExpression);
+            if (filteredRows.Length > 0)
+            {
+
+                if (filteredRows[0]["DriverName"].ToString() == columnName && filteredRows[0]["ParameterID"] != DBNull.Value)
+                {
+                    if (int.TryParse(filteredRows[0]["ParameterID"].ToString(), out int result))
                     {
                         return result;
                     }
@@ -1988,7 +2201,11 @@ namespace AQMSDataUpdateLibrary
             }
             else if (pollutantname == "1_O3")
             {
-                if (pollutantvalue >= 200 && pollutantvalue <= 322.5)
+                if (pollutantvalue > 1184)
+                {
+                    pollutantaqivalue = 500;
+                }
+                else if (pollutantvalue >= 200 && pollutantvalue <= 322.5)
                 {
                     pollutantaqivalue = (150.0 - 101.0) / (322.0 - 200.0) * (pollutantvalue - 200.0) + 101;
                 }
@@ -2007,7 +2224,11 @@ namespace AQMSDataUpdateLibrary
             }
             else if (pollutantname == "8_CO")
             {
-                if (pollutantvalue >= 0.0 && pollutantvalue <= 5.4)
+                if (pollutantvalue > 58.4)
+                {
+                    pollutantaqivalue = 500;
+                }
+                else if (pollutantvalue >= 0.0 && pollutantvalue <= 5.4)
                 {
                     pollutantaqivalue = (50.0 - 0) / (5.4 - 0.0) * (pollutantvalue - 0.0) + 0;
                 }
@@ -2053,7 +2274,11 @@ namespace AQMSDataUpdateLibrary
             }
             else if (pollutantname == "24_SO2")
             {
-                if (pollutantvalue > 797 && pollutantvalue <= 1583.5)
+                if (pollutantvalue > 2631)
+                {
+                    pollutantaqivalue = 500;
+                }
+                else if (pollutantvalue > 797 && pollutantvalue <= 1583.5)
                 {
                     pollutantaqivalue = (300.0 - 201.0) / (1583.0 - 798.0) * (pollutantvalue - 798) + 201;
                 }
@@ -2065,7 +2290,11 @@ namespace AQMSDataUpdateLibrary
             }
             else if (pollutantname == "1_NO2")
             {
-                if (pollutantvalue >= 0 && pollutantvalue <= 100.5)
+                if (pollutantvalue > 3853)
+                {
+                    pollutantaqivalue = 500;
+                }
+                else if (pollutantvalue >= 0 && pollutantvalue <= 100.5)
                 {
                     pollutantaqivalue = (50.0 - 0) / (100.0 - 0) * (pollutantvalue - 0) + 0;
                 }
@@ -2093,7 +2322,11 @@ namespace AQMSDataUpdateLibrary
             }
             else if (pollutantname == "24_PM10")
             {
-                if (pollutantvalue >= 0 && pollutantvalue <= 75.5)
+                if (pollutantvalue > 600)
+                {
+                    pollutantaqivalue = 500;
+                }
+                else if (pollutantvalue >= 0 && pollutantvalue <= 75.5)
                 {
                     pollutantaqivalue = (50.0 - 0) / (75.0 - 0) * (pollutantvalue - 0) + 0;
                 }
@@ -2121,7 +2354,11 @@ namespace AQMSDataUpdateLibrary
             }
             else if (pollutantname == "24_PM2.5")
             {
-                if (pollutantvalue >= 0.0 && pollutantvalue <= 50.4)
+                if (pollutantvalue > 500.4)
+                {
+                    pollutantaqivalue = 500;
+                }
+                else if (pollutantvalue >= 0.0 && pollutantvalue <= 50.4)
                 {
                     pollutantaqivalue = (50.0 - 0) / (50.4 - 0.0) * (pollutantvalue - 0.0) + 0;
                 }
@@ -2150,7 +2387,7 @@ namespace AQMSDataUpdateLibrary
             return pollutantaqivalue;
         }
 
-        public double? CalculateEightHoursRollingAverageAQI(int StationID,string DeviceID, DateTime Interval, string pollutantName, int TypeID, SqlConnection ConObj)
+        public (double? EightHourAvg, double? AQI) CalculateEightHoursRollingAverageAQI(int StationID, string DeviceID, DateTime Interval, string pollutantName, int TypeID, SqlConnection ConObj)
         {
             double? eightHourAvgValue = 0.0;
             double? AQIValue = 0.0;
@@ -2216,10 +2453,10 @@ namespace AQMSDataUpdateLibrary
             {
                 throw ex;
             }
-            return AQIValue;
+            return (eightHourAvgValue, AQIValue);
         }
 
-        public double? CalculateTwentryFourHoursRollingAverage(int StationID, string DeviceID,DateTime Interval, string pollutantName, int TypeID, SqlConnection ConObj)
+        public double? CalculateTwentryFourHoursRollingAverage(int StationID, string DeviceID, DateTime Interval, string pollutantName, int TypeID, SqlConnection ConObj)
         {
             double? AQIValue = 0.0;
             double? twentyfourhourAvgValue = 0.0;
