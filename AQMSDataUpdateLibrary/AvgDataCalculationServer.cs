@@ -217,7 +217,7 @@ namespace AQMSDataUpdateLibrary
             DataTable dtCount = new DataTable();
             try
             {
-                cmd.CommandText = $"Select a.Interval,COUNT(a.Interval) as TotReccnt,AVG(a.Parametervalue) as Parameteravg,a.StationID,a.DeviceID from (SELECT  dateadd({interval}, datediff({interval}, 0, sd.Interval) / @Interval * @Interval, 0) Interval,Parametervalue FROM {averageTableName}  sd where sd.StationID = @StationID and sd.DeviceID = @DeviceID and sd.ParameterID = @ParameterID and sd.TypeID = 60 ) a where a.Interval > @intervalValue group by a.Interval,a.StationID,a.DeviceID order by a.Interval asc";
+                cmd.CommandText = $"Select a.Interval,COUNT(a.Interval) as TotReccnt,AVG(a.Parametervalue) as Parameteravg from (SELECT  dateadd({interval}, datediff({interval}, 0, sd.Interval) / @Interval * @Interval, 0) Interval,Parametervalue FROM {averageTableName}  sd where sd.StationID = @StationID and sd.DeviceID = @DeviceID and sd.ParameterID = @ParameterID ) a where a.Interval > @intervalValue group by a.Interval order by a.Interval asc";
                 cmd.Parameters.Clear();
                 cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
                 cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceId"]));
@@ -1945,11 +1945,11 @@ ORDER BY
                                 {
                                     string totalRecordCount = row2["TotReccnt"].ToString();
                                     totalRecordCount = (int.Parse(totalRecordCount) * intServerInterval).ToString();
-                                    // if (dtcnt.Rows.IndexOf(row2) == (dtcnt.Rows.Count - 1) && totalRecordCount != PtypeID.ToString())
-                                    // {
-                                    //     // Skip this iteration
-                                    //     continue;
-                                    // }
+                                    if (dtcnt.Rows.IndexOf(row2) == (dtcnt.Rows.Count - 1) && totalRecordCount != PtypeID.ToString())
+                                    {
+                                        // Skip this iteration
+                                        continue;
+                                    }
                                     DateTime startTime = Convert.ToDateTime(row2["interval"]);
                                     TimeSpan elapsedTime = DateTime.Now - startTime;
                                     bool isIntervalComplete = IntervalType[1] == "M"
