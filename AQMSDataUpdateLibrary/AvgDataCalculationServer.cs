@@ -217,7 +217,7 @@ namespace AQMSDataUpdateLibrary
             DataTable dtCount = new DataTable();
             try
             {
-                cmd.CommandText = $"Select a.Interval,COUNT(a.Interval) as TotReccnt,AVG(a.Parametervalue) as Parameteravg from (SELECT dateadd({interval}, datediff({interval}, 0, sd.Interval) / @Interval * @Interval, 0) Interval,Parametervalue FROM {averageTableName}  sd where sd.StationID = @StationID and sd.DeviceID = @DeviceID and sd.ParameterID = @ParameterID ) a where a.Interval > @intervalValue group by a.Interval order by a.Interval asc";
+                cmd.CommandText = $"Select a.Interval,COUNT(a.Interval) as TotReccnt,AVG(a.Parametervalue) as Parameteravg,a.StationID,a.DeviceID from (SELECT  dateadd({interval}, datediff({interval}, 0, sd.Interval) / @Interval * @Interval, 0) Interval,Parametervalue FROM {averageTableName}  sd where sd.StationID = @StationID and sd.DeviceID = @DeviceID and sd.ParameterID = @ParameterID and sd.TypeID = 60 ) a where a.Interval > @intervalValue group by a.Interval,a.StationID,a.DeviceID order by a.Interval asc";
                 cmd.Parameters.Clear();
                 cmd.Parameters.AddWithValue("@StationID", Convert.ToInt32(row["StationID"]));
                 cmd.Parameters.AddWithValue("@DeviceID", Convert.ToInt32(row["DeviceId"]));
@@ -254,24 +254,25 @@ namespace AQMSDataUpdateLibrary
     a.Interval,
     a.DriverName,
     COUNT(a.SubIndex) AS TotRecCnt,
-    AVG(a.SubIndex) AS SubIndex
+    AVG(a.SubIndex) AS SubIndex,
+    a.ParameterID
 FROM 
 (
     SELECT 
         DATEADD(
-            {intervalType}, 
-            DATEDIFF({intervalType}, 0, pa.Interval) / @Interval * @Interval, 
+            {interval}, 
+            DATEDIFF({interval}, 0, pa.Interval) / @Interval * @Interval, 
             0
         ) AS Interval,
         d.DriverName,
-        pa.SubIndex
+        pa.SubIndex,
+        pa.ParameterID
     FROM {averageTableName} pa
     INNER JOIN {parameterTableName} dp ON pa.ParameterID = dp.ID
     INNER JOIN {driverTableName} d ON dp.DriverID = d.ID
     WHERE 
         pa.StationID = @StationID
         AND pa.DeviceID = @DeviceID
-        AND pa.TypeID = @TypeID
         AND d.DriverName IN ({AQIParametersCondition})
         AND dp.shouldUseForAqi = 1
 ) a
@@ -279,7 +280,8 @@ WHERE
     a.Interval > @intervalValue
 GROUP BY 
     a.Interval,
-    a.DriverName
+    a.DriverName,
+    a.ParameterID
 ORDER BY 
     a.Interval ASC,
     a.DriverName ASC;
@@ -648,7 +650,7 @@ ORDER BY
                 sd.DeviceID,
                 sd.ParameterID,
                 CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, sd.Interval), 0) AS DATETIME) AS MonthStart,
-                AVG(sd.SubIndex) AS SubIndex
+                AVG(sd.SubIndex) AS SubIndex,
                 AVG(sd.Parametervalue) AS AvgValue
             FROM {averageTableName} sd
             JOIN {flagTableName} f ON sd.LoggerFlags = f.ID AND f.Type != 'Validation'
@@ -754,8 +756,8 @@ ORDER BY
             catch (Exception ex)
             {
                 SqlConnection ConObj = new SqlConnection(sqlConnectionString);
-                WriteToLogTable(ConObj, ex.Message, "Exception");
                 Log.Error("InsertDataIntoAvgTable: ", ex);
+                WriteToLogTable(ConObj, ex.Message, "Exception");
                 if (ConObj != null)
                 {
                     ConObj.Close();
@@ -847,7 +849,7 @@ ORDER BY
                 sd.ParameterIDRef,
                 CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, sd.Interval), 0) AS DATETIME) AS Interval,
                 AVG(sd.Parametervalue) AS Parametervalue,
-                AVG(sd.SubIndex) AS SubIndex
+                AVG(sd.SubIndex) AS SubIndex,
                 CAST(@Interval AS NVARCHAR(10)) + @IntervalType AS Type,
                 {priorityLoggerflag} AS LoggerFlags,
                 {typeIdValue} AS TypeID
@@ -891,8 +893,8 @@ ORDER BY
             catch (Exception ex)
             {
                 SqlConnection ConObj = new SqlConnection(sqlConnectionString);
-                WriteToLogTable(ConObj, ex.Message, "Exception");
                 Log.Error("InsertDataIntoAvgTable: ", ex);
+                WriteToLogTable(ConObj, ex.Message, "Exception");
                 if (ConObj != null)
                 {
                     ConObj.Close();
@@ -1568,7 +1570,7 @@ ORDER BY
                 {
                     ConObj.Open();
                 }
-                InsertParameterSamplingsForCalculatedParameters(ConObj);
+                // InsertParameterSamplingsForCalculatedParameters(ConObj);
                 // SqlCommand cmd = new SqlCommand($"select  * from {parameterTableName}", ConObj);
                 SqlCommand cmd = new SqlCommand($"SELECT p.*, d.DriverName AS ParameterDriverName FROM {parameterTableName} p inner join {driverTableName} d ON p.DriverID = d.ID where d.DriverName != 'AQI Index' and p.ServerAvgInterval IS NOT NULL and p.DeviceID={DeviceID}", ConObj);
 
@@ -1943,14 +1945,11 @@ ORDER BY
                                 {
                                     string totalRecordCount = row2["TotReccnt"].ToString();
                                     totalRecordCount = (int.Parse(totalRecordCount) * intServerInterval).ToString();
-                                    //if (totalRecordCount == PtypeID.ToString())//if totalrecords and pTypeId are equal
-                                    //{
-                                    //To check the latest record count
-                                    if (dtcnt.Rows.IndexOf(row2) == (dtcnt.Rows.Count - 1) && totalRecordCount != PtypeID.ToString())
-                                    {
-                                        // Skip this iteration
-                                        continue;
-                                    }
+                                    // if (dtcnt.Rows.IndexOf(row2) == (dtcnt.Rows.Count - 1) && totalRecordCount != PtypeID.ToString())
+                                    // {
+                                    //     // Skip this iteration
+                                    //     continue;
+                                    // }
                                     DateTime startTime = Convert.ToDateTime(row2["interval"]);
                                     TimeSpan elapsedTime = DateTime.Now - startTime;
                                     bool isIntervalComplete = IntervalType[1] == "M"
@@ -2140,9 +2139,9 @@ ORDER BY
             if (filteredRows.Length > 0)
             {
 
-                if (filteredRows[0]["DriverName"].ToString() == columnName && filteredRows[0]["ConvertedParameterValue"] != DBNull.Value)
+                if (filteredRows[0]["DriverName"].ToString() == columnName && filteredRows[0]["SubIndex"] != DBNull.Value)
                 {
-                    if (double.TryParse(filteredRows[0]["ConvertedParameterValue"].ToString(), out double result))
+                    if (double.TryParse(filteredRows[0]["SubIndex"].ToString(), out double result))
                     {
                         return result;
                     }
@@ -2387,22 +2386,43 @@ ORDER BY
             return pollutantaqivalue;
         }
 
-        public (double? EightHourAvg, double? AQI) CalculateEightHoursRollingAverageAQI(int StationID, string DeviceID, DateTime Interval, string pollutantName, int TypeID, SqlConnection ConObj)
+        public (double? EightHourAvg, double? AQI) CalculateEightHoursRollingAverageAQI(
+    int StationID,
+    string DeviceID,
+    DateTime Interval,
+    string pollutantName,
+    int TypeID,
+    SqlConnection ConObj)
         {
-            double? eightHourAvgValue = 0.0;
-            double? AQIValue = 0.0;
+            double? eightHourAvgValue = null;
+            double? AQIValue = null;
+
             try
             {
                 string paramter = pollutantName.Split('_')[1];
                 SqlCommand cmd = new SqlCommand(string.Empty, ConObj);
                 DataTable dtpollutant = new DataTable();
+
                 DateTime Interval2 = Interval.AddHours(-8);
+
                 cmd.CommandText = $@"
-           SELECT d.DriverName,pa.ParameterValue * COALESCE(CASE WHEN u.UnitName <> pc.SecondaryUnit THEN TRY_CAST(pc.ConversionFactor AS FLOAT)
-                ELSE 1 END, 1) AS ConvertedParameterValue FROM  
-        {averageTableName} pa INNER JOIN {parameterTableName} dp ON pa.ParameterID = dp.ID INNER JOIN {driverTableName} d ON dp.DriverID = d.ID 
-        INNER JOIN ReportedUnits u ON dp.UnitID = u.ID LEFT JOIN Parameter_Conversion pc ON d.DriverName = pc.Parameter 
-    WHERE  pa.StationID = @StationID AND pa.DeviceID=@DeviceID AND pa.Interval <= @Interval AND pa.Interval > @Interval2 AND pa.TypeID = @TypeID AND d.DriverName = @DriverName order by pa.Interval desc";
+            SELECT d.DriverName,
+                   pa.ParameterValue * COALESCE(
+                        CASE WHEN u.UnitName <> pc.SecondaryUnit 
+                             THEN TRY_CAST(pc.ConversionFactor AS FLOAT)
+                             ELSE 1 END, 1) AS ConvertedParameterValue
+            FROM {averageTableName} pa
+            INNER JOIN {parameterTableName} dp ON pa.ParameterID = dp.ID
+            INNER JOIN {driverTableName} d ON dp.DriverID = d.ID
+            INNER JOIN ReportedUnits u ON dp.UnitID = u.ID
+            LEFT JOIN Parameter_Conversion pc ON d.DriverName = pc.Parameter
+            WHERE pa.StationID = @StationID 
+              AND pa.DeviceID = @DeviceID 
+              AND pa.Interval <= @Interval 
+              AND pa.Interval > @Interval2 
+              AND pa.TypeID = @TypeID 
+              AND d.DriverName = @DriverName
+            ORDER BY pa.Interval DESC";
 
                 cmd.Parameters.Clear();
                 cmd.Parameters.AddWithValue("@StationID", StationID);
@@ -2412,49 +2432,59 @@ ORDER BY
                 cmd.Parameters.AddWithValue("@TypeID", TypeID);
                 cmd.Parameters.AddWithValue("@DriverName", paramter);
 
-                Log.Info("Query To fetch the number of records for each Interval: " + cmd.CommandText);
-
                 using (SqlDataAdapter adapter = new SqlDataAdapter(cmd))
                 {
                     adapter.Fill(dtpollutant);
                 }
+
+                // -------------------------------
+                // 🔥 75% Data Availability Check
+                // Must have ≥ 6 valid hourly records
+                // -------------------------------
+                int requiredCount = 6; // 75% of 8 hours
+                int actualCount = dtpollutant.Rows.Count;
+
+                if (actualCount < requiredCount)
+                {
+                    // Not enough data → return nulls
+                    return (null, null);
+                }
+
+
                 int dividedindex = 0;
                 double? rollingPollutantAvg = null;
-                if (dtpollutant.Rows.Count == 0)
+
+                for (int j = 0; j < dtpollutant.Rows.Count; j++)
                 {
-                    AQIValue = null;
-                }
-                else
-                {
-                    for (int j = 0; j < dtpollutant.Rows.Count; j++)
+                    double indival = 0.0;
+                    if (double.TryParse(dtpollutant.Rows[j]["ConvertedParameterValue"].ToString(), out indival))
                     {
-                        double indival = 0.0;
-                        if (double.TryParse(dtpollutant.Rows[j]["ConvertedParameterValue"].ToString(), out indival))
-                        {
-                            if (indival <= 0)
-                            {
-                                continue;
-                            }
+                        if (indival <= 0)
+                            continue;
 
-                            dividedindex++;
-                            if (rollingPollutantAvg == null)
-                            {
-                                rollingPollutantAvg = 0;
-                            }
-                            rollingPollutantAvg += indival;
-                        }
+                        dividedindex++;
+
+                        if (rollingPollutantAvg == null)
+                            rollingPollutantAvg = 0;
+
+                        rollingPollutantAvg += indival;
                     }
-
-                    eightHourAvgValue = rollingPollutantAvg != null ? rollingPollutantAvg / dividedindex : rollingPollutantAvg;
-                    AQIValue = CalculatePollutantAQIValues(eightHourAvgValue, pollutantName);
                 }
+
+                if (dividedindex == 0)
+                    return (null, null);
+
+                eightHourAvgValue = rollingPollutantAvg / dividedindex;
+                AQIValue = CalculatePollutantAQIValues(eightHourAvgValue, pollutantName);
             }
             catch (Exception ex)
             {
                 throw ex;
             }
+
             return (eightHourAvgValue, AQIValue);
         }
+
 
         public double? CalculateTwentryFourHoursRollingAverage(int StationID, string DeviceID, DateTime Interval, string pollutantName, int TypeID, SqlConnection ConObj)
         {
@@ -2488,6 +2518,21 @@ ORDER BY
                 {
                     adapter.Fill(dtpollutant);
                 }
+
+                // -------------------------------
+                // 🔥 75% Data Availability Check
+                // Must have ≥ 18 valid hourly records
+                // -------------------------------
+
+                int requiredCount = 18; // 75% of 24 hours
+                int actualCount = dtpollutant.Rows.Count;
+
+                if (actualCount < requiredCount)
+                {
+                    // Not enough data → return nulls
+                    return null;
+                }
+
 
                 int dividedindex = 0;
                 double? rollingPollutantAvg = null;
