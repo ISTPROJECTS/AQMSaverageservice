@@ -2200,11 +2200,11 @@ ORDER BY
             }
             else if (pollutantname == "1_O3")
             {
-                if (pollutantvalue > 1184)
-                {
-                    pollutantaqivalue = 500;
-                }
-                else if (pollutantvalue >= 200 && pollutantvalue <= 322.5)
+                // if (pollutantvalue > 1184)
+                // {
+                //     pollutantaqivalue = 500;
+                // }
+                if (pollutantvalue >= 200 && pollutantvalue <= 322.5)
                 {
                     pollutantaqivalue = (150.0 - 101.0) / (322.0 - 200.0) * (pollutantvalue - 200.0) + 101;
                 }
@@ -2219,15 +2219,19 @@ ORDER BY
                 else if (pollutantvalue > 792.5)
                 {
                     pollutantaqivalue = (500.0 - 301.0) / (1184.0 - 793.0) * (pollutantvalue - 793.0) + 301;
+                    if (pollutantaqivalue > 1500)
+                    {
+                        pollutantaqivalue = 1500;
+                    }
                 }
             }
             else if (pollutantname == "8_CO")
             {
-                if (pollutantvalue > 58.4)
-                {
-                    pollutantaqivalue = 500;
-                }
-                else if (pollutantvalue >= 0.0 && pollutantvalue <= 5.4)
+                // if (pollutantvalue > 58.4)
+                // {
+                //     pollutantaqivalue = 500;
+                // }
+                if (pollutantvalue >= 0.0 && pollutantvalue <= 5.4)
                 {
                     pollutantaqivalue = (50.0 - 0) / (5.4 - 0.0) * (pollutantvalue - 0.0) + 0;
                 }
@@ -2250,6 +2254,10 @@ ORDER BY
                 else if (pollutantvalue > 35.4)
                 {
                     pollutantaqivalue = (500.0 - 301.0) / (58.4 - 35.5) * (pollutantvalue - 35.5) + 301;
+                    if (pollutantaqivalue > 1500)
+                    {
+                        pollutantaqivalue = 1500;
+                    }
                 }
             }
             else if (pollutantname == "1_SO2")
@@ -2273,27 +2281,31 @@ ORDER BY
             }
             else if (pollutantname == "24_SO2")
             {
-                if (pollutantvalue > 2631)
-                {
-                    pollutantaqivalue = 500;
-                }
-                else if (pollutantvalue > 797 && pollutantvalue <= 1583.5)
+                // if (pollutantvalue > 2631)
+                // {
+                //     pollutantaqivalue = 500;
+                // }
+                if (pollutantvalue > 797 && pollutantvalue <= 1583.5)
                 {
                     pollutantaqivalue = (300.0 - 201.0) / (1583.0 - 798.0) * (pollutantvalue - 798) + 201;
                 }
                 else if (pollutantvalue > 1583.5)
                 {
                     pollutantaqivalue = (500.0 - 301.0) / (2631.0 - 1584.0) * (pollutantvalue - 1584) + 301;
+                    if (pollutantaqivalue > 1500)
+                    {
+                        pollutantaqivalue = 1500;
+                    }
                 }
 
             }
             else if (pollutantname == "1_NO2")
             {
-                if (pollutantvalue > 3853)
-                {
-                    pollutantaqivalue = 500;
-                }
-                else if (pollutantvalue >= 0 && pollutantvalue <= 100.5)
+                // if (pollutantvalue > 3853)
+                // {
+                //     pollutantaqivalue = 500;
+                // }
+                if (pollutantvalue >= 0 && pollutantvalue <= 100.5)
                 {
                     pollutantaqivalue = (50.0 - 0) / (100.0 - 0) * (pollutantvalue - 0) + 0;
                 }
@@ -2313,19 +2325,22 @@ ORDER BY
                 {
                     pollutantaqivalue = (300.0 - 201.0) / (2349.0 - 1222.0) * (pollutantvalue - 1222) + 201;
                 }
-                //else if (pollutantvalue > 2349.5 && pollutantvalue <= 3853)
                 else if (pollutantvalue > 2349.5)
                 {
                     pollutantaqivalue = (500.0 - 301.0) / (3853.0 - 2350.0) * (pollutantvalue - 2350) + 301;
+                    if (pollutantaqivalue > 1500)
+                    {
+                        pollutantaqivalue = 1500;
+                    }
                 }
             }
             else if (pollutantname == "24_PM10")
             {
-                if (pollutantvalue > 600)
-                {
-                    pollutantaqivalue = 500;
-                }
-                else if (pollutantvalue >= 0 && pollutantvalue <= 75.5)
+                // if (pollutantvalue > 600)
+                // {
+                //     pollutantaqivalue = 500;
+                // }
+                if (pollutantvalue >= 0 && pollutantvalue <= 75.5)
                 {
                     pollutantaqivalue = (50.0 - 0) / (75.0 - 0) * (pollutantvalue - 0) + 0;
                 }
@@ -2345,19 +2360,22 @@ ORDER BY
                 {
                     pollutantaqivalue = (300.0 - 201.0) / (420.0 - 351.0) * (pollutantvalue - 351) + 201;
                 }
-                //else if (pollutantvalue > 420.5 && pollutantvalue <= 600)
                 else if (pollutantvalue > 420.5)
                 {
                     pollutantaqivalue = (500.0 - 301.0) / (600.0 - 421.0) * (pollutantvalue - 421) + 301;
+                    if (pollutantaqivalue > 1500)
+                    {
+                        pollutantaqivalue = 1500;
+                    }
                 }
             }
             else if (pollutantname == "24_PM2.5")
             {
-                if (pollutantvalue > 500.4)
-                {
-                    pollutantaqivalue = 500;
-                }
-                else if (pollutantvalue >= 0.0 && pollutantvalue <= 50.4)
+                // if (pollutantvalue > 500.4)
+                // {
+                //     pollutantaqivalue = 500;
+                // }
+                if (pollutantvalue >= 0.0 && pollutantvalue <= 50.4)
                 {
                     pollutantaqivalue = (50.0 - 0) / (50.4 - 0.0) * (pollutantvalue - 0.0) + 0;
                 }
@@ -2377,10 +2395,13 @@ ORDER BY
                 {
                     pollutantaqivalue = (300.0 - 201.0) / (250.4 - 150.5) * (pollutantvalue - 150.5) + 201;
                 }
-                //else if (pollutantvalue > 250.4 && pollutantvalue <= 500.4)
                 else if (pollutantvalue > 250.4)
                 {
                     pollutantaqivalue = (500.0 - 301.0) / (500.4 - 250.4) * (pollutantvalue - 250.4) + 301;
+                    if (pollutantaqivalue > 1500)
+                    {
+                        pollutantaqivalue = 1500;
+                    }
                 }
             }
             return pollutantaqivalue;
