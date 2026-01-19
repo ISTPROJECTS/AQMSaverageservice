@@ -478,7 +478,7 @@ namespace AQMSDataUpdateLibrary.Services
                     ParameterValue = aqiResult.AQI,
                     Interval = interval,
                     TypeID = typeId,
-                    Type = "60M",
+                    Type = null,
                     LoggerFlags = 1,
                     CreatedTime = DateTime.Now
                 };
