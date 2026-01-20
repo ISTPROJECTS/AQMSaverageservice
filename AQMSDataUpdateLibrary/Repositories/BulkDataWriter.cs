@@ -40,8 +40,6 @@ namespace AQMSDataUpdateLibrary.Repositories
         {
             if (records == null || records.Count == 0) return;
 
-            var dataTable = ConvertToAverageDataTable(records);
-
             using (var connection = new SqlConnection(_connectionString))
             {
                 await connection.OpenAsync();
@@ -49,35 +47,79 @@ namespace AQMSDataUpdateLibrary.Repositories
                 {
                     try
                     {
+                        // Create staging table
+                        string createStagingTable = $@"
+                    CREATE TABLE #StagingAverages (
+                        StationID INT,
+                        DeviceID INT,
+                        ParameterID INT,
+                        ParameterIDRef INT,
+                        Parametervalue FLOAT,
+                        SubIndex FLOAT,
+                        Type VARCHAR(50),
+                        Interval DATETIME,
+                        LoggerFlags INT,
+                        TypeID INT,
+                        CreatedTime DATETIME
+                    )";
+
+                        using (var cmd = new SqlCommand(createStagingTable, connection, transaction))
+                        {
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+
+                        // Bulk insert into staging
+                        var dataTable = ConvertToAverageDataTable(records);
                         using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction))
                         {
-                            bulkCopy.DestinationTableName = _averageTableName;
+                            bulkCopy.DestinationTableName = "#StagingAverages";
                             bulkCopy.BatchSize = BatchSize;
-                            bulkCopy.BulkCopyTimeout = 300; // 5 minutes
-
-                            // Map columns
-                            bulkCopy.ColumnMappings.Add("StationID", "StationID");
-                            bulkCopy.ColumnMappings.Add("DeviceID", "DeviceID");
-                            bulkCopy.ColumnMappings.Add("ParameterID", "ParameterID");
-                            bulkCopy.ColumnMappings.Add("ParameterIDRef", "ParameterIDRef");
-                            bulkCopy.ColumnMappings.Add("Parametervalue", "Parametervalue");
-                            bulkCopy.ColumnMappings.Add("SubIndex", "SubIndex");
-                            bulkCopy.ColumnMappings.Add("Type", "Type");
-                            bulkCopy.ColumnMappings.Add("Interval", "Interval");
-                            bulkCopy.ColumnMappings.Add("LoggerFlags", "LoggerFlags");
-                            bulkCopy.ColumnMappings.Add("TypeID", "TypeID");
-                            bulkCopy.ColumnMappings.Add("CreatedTime", "CreatedTime");
-
                             await bulkCopy.WriteToServerAsync(dataTable);
                         }
 
+                        // INSERT with WHERE NOT EXISTS (same as original code logic)
+                        string insertQuery = $@"
+                    INSERT INTO {_averageTableName} (
+                        StationID, DeviceID, ParameterID, ParameterIDRef,
+                        Parametervalue, SubIndex, Type, Interval,
+                        LoggerFlags, TypeID, CreatedTime
+                    )
+                    SELECT 
+                        s.StationID, s.DeviceID, s.ParameterID, s.ParameterIDRef,
+                        s.Parametervalue, s.SubIndex, s.Type, s.Interval,
+                        s.LoggerFlags, s.TypeID, s.CreatedTime
+                    FROM #StagingAverages s
+                    LEFT JOIN {_averageTableName} t ON
+                        s.StationID = t.StationID AND
+                        s.DeviceID = t.DeviceID AND
+                        s.ParameterID = t.ParameterID AND
+                        s.Interval = t.Interval AND
+                        s.TypeID = t.TypeID
+                    WHERE t.ID IS NULL";  // Same pattern as original code!
+
+                        int rowsInserted;
+                        using (var cmd = new SqlCommand(insertQuery, connection, transaction))
+                        {
+                            cmd.CommandTimeout = 300;
+                            rowsInserted = await cmd.ExecuteNonQueryAsync();
+                        }
+
                         transaction.Commit();
-                        _log.Info($"Bulk inserted {records.Count} average records");
+
+                        int duplicates = records.Count - rowsInserted;
+                        if (duplicates > 0)
+                        {
+                            _log.Info($"Bulk inserted {rowsInserted} new records, skipped {duplicates} existing records");
+                        }
+                        else
+                        {
+                            _log.Info($"Bulk inserted {rowsInserted} average records");
+                        }
                     }
                     catch (Exception ex)
                     {
                         transaction.Rollback();
-                        _log.Error("Bulk insert failed", ex);
+                        _log.Error("Bulk insert with NOT EXISTS failed", ex);
                         throw;
                     }
                 }
