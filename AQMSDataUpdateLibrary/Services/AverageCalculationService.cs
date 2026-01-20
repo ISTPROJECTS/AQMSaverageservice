@@ -394,13 +394,16 @@ namespace AQMSDataUpdateLibrary.Services
                     string intervalCode = parts[1];
                     int typeId = intervalCode == "M" ? intervalValue : intervalValue * 60;
 
-                    // Only process hourly AQI
-                    if (typeId != AQIConstants.OneHourTypeID)
+                    if (typeId == AQIConstants.OneHourTypeID)
                     {
-                        continue;
+                        // Calculate AQI from pollutant values (fresh calculation)
+                        await CalculateAQIForIntervalsAsync(param, typeId);
                     }
-
-                    await CalculateAQIForIntervalsAsync(param, typeId);
+                    else
+                    {
+                        // Average AQI and sub-indices from hourly data
+                        await AverageAQIFromHourlyDataAsync(param, intervalValue, intervalCode, typeId);
+                    }
                 }
             }
         }
@@ -630,6 +633,279 @@ namespace AQMSDataUpdateLibrary.Services
             // Left as exercise - follows same pattern as monthly
             
             return true;
+        }
+
+        private async Task AverageAQIFromHourlyDataAsync(
+            ParameterInfo param,
+            int intervalValue,
+            string intervalCode,
+            int typeId)
+        {
+            _log.Info($"Averaging AQI and sub-indices for {intervalValue}{intervalCode} interval");
+
+            // Get last processed interval for this type
+            DateTime? lastInterval = await _parameterRepo.GetLatestIntervalAsync(
+                param.StationID, param.DeviceID, param.ID, typeId);
+
+            // Get intervals that need averaging from hourly data
+            var intervalsToProcess = await GetIntervalsToAverageAsync(
+                param.StationID, param.DeviceID, lastInterval, intervalValue, intervalCode, typeId);
+
+            if (!intervalsToProcess.Any())
+            {
+                _log.Info("No intervals to average");
+                return;
+            }
+
+            var aqiRecords = new List<AverageRecord>();
+            var subIndexUpdates = new List<AverageRecord>();
+
+            foreach (var interval in intervalsToProcess)
+            {
+                // Check if interval is complete
+                TimeSpan elapsed = DateTime.Now - interval;
+                bool isComplete = intervalCode == "M"
+                    ? elapsed.TotalMinutes >= intervalValue
+                    : elapsed.TotalHours >= intervalValue;
+
+                if (!isComplete)
+                {
+                    continue;
+                }
+
+                // Get averaged AQI value from hourly records
+                var avgAQI = await GetAveragedAQIValueAsync(
+                    param.StationID, param.DeviceID, interval, intervalValue, intervalCode);
+
+                if (avgAQI.HasValue)
+                {
+                    // Create AQI record with averaged value
+                    var aqiRecord = new AverageRecord
+                    {
+                        StationID = param.StationID,
+                        DeviceID = param.DeviceID,
+                        ParameterID = param.ID,
+                        ParameterIDRef = param.ParameterID,
+                        ParameterValue = avgAQI.Value,
+                        Interval = interval,
+                        TypeID = typeId,
+                        Type = null,
+                        LoggerFlags = 1,
+                        CreatedTime = DateTime.Now
+                    };
+
+                    aqiRecords.Add(aqiRecord);
+                }
+
+                // Get averaged sub-indices for all pollutants
+                var subIndices = await GetAveragedSubIndicesAsync(
+                    param.StationID, param.DeviceID, interval, intervalValue, intervalCode);
+
+                foreach (var subIndex in subIndices)
+                {
+                    subIndexUpdates.Add(new AverageRecord
+                    {
+                        StationID = param.StationID,
+                        DeviceID = param.DeviceID,
+                        ParameterID = subIndex.ParameterID,
+                        SubIndex = subIndex.AvgSubIndex,
+                        ParameterValue = subIndex.AvgParameterValue,
+                        Interval = interval,
+                        TypeID = typeId,
+                        Type = $"{intervalValue}{intervalCode}",
+                        LoggerFlags = 1,
+                        CreatedTime = DateTime.Now,
+                        ParameterIDRef = subIndex.ParameterIDRef
+                    });
+                }
+            }
+
+            // Insert averaged AQI records
+            if (aqiRecords.Any())
+            {
+                await _bulkWriter.BulkInsertAveragesAsync(aqiRecords);
+                _log.Info($"Inserted {aqiRecords.Count} averaged AQI records for {intervalValue}{intervalCode}");
+            }
+
+            // Insert averaged sub-index records for pollutants
+            if (subIndexUpdates.Any())
+            {
+                await _bulkWriter.BulkInsertAveragesAsync(subIndexUpdates);
+                _log.Info($"Inserted {subIndexUpdates.Count} averaged sub-index records for {intervalValue}{intervalCode}");
+            }
+        }
+
+        private async Task<List<DateTime>> GetIntervalsToAverageAsync(
+            int stationId,
+            int deviceId,
+            DateTime? lastInterval,
+            int intervalValue,
+            string intervalCode,
+            int targetTypeId)
+        {
+            var intervals = new List<DateTime>();
+            string intervalType = intervalCode == "M" ? "MINUTE" : "HOUR";
+
+            // Get distinct intervals from hourly data that need to be averaged
+            string query = $@"
+                SELECT DISTINCT 
+                    DATEADD({intervalType}, DATEDIFF({intervalType}, 0, pa.Interval) / @Interval * @Interval, 0) AS Interval
+                FROM ParameterAverages pa WITH (NOLOCK)
+                INNER JOIN DMN_Parameters dp WITH (NOLOCK) ON pa.ParameterID = dp.ID
+                INNER JOIN MST_Devices_Drivers d WITH (NOLOCK) ON dp.DriverID = d.ID
+                WHERE pa.StationID = @StationID
+                  AND pa.DeviceID = @DeviceID
+                  AND pa.TypeID = @HourlyTypeID
+                  AND d.DriverName IN ('PM2.5', 'PM10', 'O₃', 'SO₂', 'NO₂', 'CO', 'AQI Index')
+                  AND (@LastInterval IS NULL OR 
+                       DATEADD({intervalType}, DATEDIFF({intervalType}, 0, pa.Interval) / @Interval * @Interval, 0) > @LastInterval)
+                ORDER BY Interval ASC";
+
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+                using (var cmd = new SqlCommand(query, connection))
+                {
+                    cmd.Parameters.AddWithValue("@StationID", stationId);
+                    cmd.Parameters.AddWithValue("@DeviceID", deviceId);
+                    cmd.Parameters.AddWithValue("@HourlyTypeID", AQIConstants.OneHourTypeID);
+                    cmd.Parameters.AddWithValue("@Interval", intervalValue);
+                    cmd.Parameters.AddWithValue("@LastInterval",
+                        lastInterval.HasValue ? (object)lastInterval.Value : DBNull.Value);
+
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            intervals.Add(reader.GetDateTime(0));
+                        }
+                    }
+                }
+            }
+
+            return intervals;
+        }
+
+        private async Task<double?> GetAveragedAQIValueAsync(
+            int stationId,
+            int deviceId,
+            DateTime interval,
+            int intervalValue,
+            string intervalCode)
+        {
+            string intervalType = intervalCode == "M" ? "MINUTE" : "HOUR";
+
+            // Average the AQI values from hourly data for this interval
+            string query = $@"
+                SELECT AVG(pa.Parametervalue) AS AvgAQI
+                FROM ParameterAverages pa WITH (NOLOCK)
+                INNER JOIN DMN_Parameters dp WITH (NOLOCK) ON pa.ParameterID = dp.ID
+                INNER JOIN MST_Devices_Drivers d WITH (NOLOCK) ON dp.DriverID = d.ID
+                WHERE pa.StationID = @StationID
+                  AND pa.DeviceID = @DeviceID
+                  AND pa.TypeID = @HourlyTypeID
+                  AND d.DriverName = 'AQI Index'
+                  AND DATEADD({intervalType}, DATEDIFF({intervalType}, 0, pa.Interval) / @Interval * @Interval, 0) = @TargetInterval
+                  AND pa.Parametervalue IS NOT NULL";
+
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+                using (var cmd = new SqlCommand(query, connection))
+                {
+                    cmd.Parameters.AddWithValue("@StationID", stationId);
+                    cmd.Parameters.AddWithValue("@DeviceID", deviceId);
+                    cmd.Parameters.AddWithValue("@HourlyTypeID", AQIConstants.OneHourTypeID);
+                    cmd.Parameters.AddWithValue("@Interval", intervalValue);
+                    cmd.Parameters.AddWithValue("@TargetInterval", interval);
+
+                    var result = await cmd.ExecuteScalarAsync();
+                    return result == null || result == DBNull.Value
+                        ? (double?)null
+                        : Convert.ToDouble(result);
+                }
+            }
+        }
+
+        private async Task<List<AveragedSubIndex>> GetAveragedSubIndicesAsync(
+            int stationId,
+            int deviceId,
+            DateTime interval,
+            int intervalValue,
+            string intervalCode)
+        {
+            var subIndices = new List<AveragedSubIndex>();
+            string intervalType = intervalCode == "M" ? "MINUTE" : "HOUR";
+            string[] aqiParams = _aqiCalculator.GetType()
+                .GetField("_aqiParameters", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                ?.GetValue(_aqiCalculator)?.ToString()?.Split(',') ?? new string[0];
+
+            if (aqiParams.Length == 0)
+            {
+                // Fallback to hardcoded list
+                aqiParams = new[] { "PM2.5", "PM10", "O₃", "SO₂", "NO₂", "CO" };
+            }
+
+            string paramsCondition = string.Join(",", aqiParams.Select(p => $"'{p.Trim()}'"));
+
+            // Average sub-indices and parameter values from hourly data
+            string query = $@"
+                SELECT 
+                    d.DriverName,
+                    pa.ParameterID,
+                    dp.ParameterID AS ParameterIDRef,
+                    AVG(pa.SubIndex) AS AvgSubIndex,
+                    AVG(pa.Parametervalue) AS AvgParameterValue
+                FROM ParameterAverages pa WITH (NOLOCK)
+                INNER JOIN DMN_Parameters dp WITH (NOLOCK) ON pa.ParameterID = dp.ID
+                INNER JOIN MST_Devices_Drivers d WITH (NOLOCK) ON dp.DriverID = d.ID
+                WHERE pa.StationID = @StationID
+                  AND pa.DeviceID = @DeviceID
+                  AND pa.TypeID = @HourlyTypeID
+                  AND d.DriverName IN ({paramsCondition})
+                  AND dp.shouldUseForAqi = 1
+                  AND DATEADD({intervalType}, DATEDIFF({intervalType}, 0, pa.Interval) / @Interval * @Interval, 0) = @TargetInterval
+                  AND pa.SubIndex IS NOT NULL
+                GROUP BY d.DriverName, pa.ParameterID, dp.ParameterID";
+
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+                using (var cmd = new SqlCommand(query, connection))
+                {
+                    cmd.Parameters.AddWithValue("@StationID", stationId);
+                    cmd.Parameters.AddWithValue("@DeviceID", deviceId);
+                    cmd.Parameters.AddWithValue("@HourlyTypeID", AQIConstants.OneHourTypeID);
+                    cmd.Parameters.AddWithValue("@Interval", intervalValue);
+                    cmd.Parameters.AddWithValue("@TargetInterval", interval);
+
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            subIndices.Add(new AveragedSubIndex
+                            {
+                                DriverName = reader.GetString(0),
+                                ParameterID = reader.GetInt32(1),
+                                ParameterIDRef = reader.GetInt32(2),
+                                AvgSubIndex = reader.IsDBNull(3) ? (double?)null : reader.GetDouble(3),
+                                AvgParameterValue = reader.IsDBNull(4) ? (double?)null : reader.GetDouble(4)
+                            });
+                        }
+                    }
+                }
+            }
+
+            return subIndices;
+        }
+
+        private class AveragedSubIndex
+        {
+            public string DriverName { get; set; }
+            public int ParameterID { get; set; }
+            public int ParameterIDRef { get; set; }
+            public double? AvgSubIndex { get; set; }
+            public double? AvgParameterValue { get; set; }
         }
     }
 }
