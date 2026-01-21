@@ -593,7 +593,7 @@ namespace AQMSDataUpdateLibrary.Services
 
             if (updates.Any())
             {
-                await _bulkWriter.BulkUpdateAveragesAsync(updates);
+                await UpdateSubIndicesOnExistingRecordsAsync(updates);
             }
         }
 
@@ -730,7 +730,7 @@ namespace AQMSDataUpdateLibrary.Services
             // Insert averaged sub-index records for pollutants
             if (subIndexUpdates.Any())
             {
-                await _bulkWriter.BulkInsertAveragesAsync(subIndexUpdates);
+                await UpdateSubIndicesOnExistingRecordsAsync(subIndexUpdates);
                 _log.Info($"Inserted {subIndexUpdates.Count} averaged sub-index records for {intervalValue}{intervalCode}");
             }
         }
@@ -897,6 +897,93 @@ namespace AQMSDataUpdateLibrary.Services
             }
 
             return subIndices;
+        }
+
+        private async Task UpdateSubIndicesOnExistingRecordsAsync(List<AverageRecord> subIndexUpdates)
+        {
+            if (!subIndexUpdates.Any()) return;
+
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    try
+                    {
+                        // Create temp table for updates
+                        string createTempTable = @"
+                            CREATE TABLE #TempSubIndexUpdates (
+                                StationID INT,
+                                DeviceID INT,
+                                ParameterID INT,
+                                Interval DATETIME,
+                                TypeID INT,
+                                SubIndex FLOAT
+                            )";
+
+                        using (var cmd = new SqlCommand(createTempTable, connection, transaction))
+                        {
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+
+                        // Bulk load updates to temp table
+                        var tempTable = new DataTable();
+                        tempTable.Columns.Add("StationID", typeof(int));
+                        tempTable.Columns.Add("DeviceID", typeof(int));
+                        tempTable.Columns.Add("ParameterID", typeof(int));
+                        tempTable.Columns.Add("Interval", typeof(DateTime));
+                        tempTable.Columns.Add("TypeID", typeof(int));
+                        tempTable.Columns.Add("SubIndex", typeof(double));
+
+                        foreach (var update in subIndexUpdates)
+                        {
+                            tempTable.Rows.Add(
+                                update.StationID,
+                                update.DeviceID,
+                                update.ParameterID,
+                                update.Interval,
+                                update.TypeID,
+                                update.SubIndex ?? (object)DBNull.Value
+                            );
+                        }
+
+                        using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction))
+                        {
+                            bulkCopy.DestinationTableName = "#TempSubIndexUpdates";
+                            bulkCopy.BatchSize = 1000;
+                            await bulkCopy.WriteToServerAsync(tempTable);
+                        }
+
+                        // Update existing records with sub-indices
+                        string updateQuery = $@"
+                            UPDATE pa
+                            SET pa.SubIndex = t.SubIndex
+                            FROM ParameterAverages pa
+                            INNER JOIN #TempSubIndexUpdates t ON
+                                pa.StationID = t.StationID AND
+                                pa.DeviceID = t.DeviceID AND
+                                pa.ParameterID = t.ParameterID AND
+                                pa.Interval = t.Interval AND
+                                pa.TypeID = t.TypeID";
+
+                        int rowsUpdated;
+                        using (var cmd = new SqlCommand(updateQuery, connection, transaction))
+                        {
+                            cmd.CommandTimeout = 300;
+                            rowsUpdated = await cmd.ExecuteNonQueryAsync();
+                        }
+
+                        transaction.Commit();
+                        _log.Info($"Updated SubIndex for {rowsUpdated} pollutant records");
+                    }
+                    catch (Exception ex)
+                    {
+                        transaction.Rollback();
+                        _log.Error("Failed to update sub-indices", ex);
+                        throw;
+                    }
+                }
+            }
         }
 
         private class AveragedSubIndex
