@@ -16,6 +16,7 @@ namespace AQMSDataUpdateLibrary.Repositories
     public interface IBulkDataWriter
     {
         Task BulkInsertAveragesAsync(List<AverageRecord> records);
+        Task BulkInsertAveragesToTableAsync(List<AverageRecord> records, string destinationTableName);
         Task BulkUpdateAveragesAsync(List<AverageRecord> records);
         Task BulkInsertParameterReadingsAsync(List<ParameterReading> readings);
     }
@@ -120,6 +121,85 @@ namespace AQMSDataUpdateLibrary.Repositories
                     {
                         transaction.Rollback();
                         _log.Error("Bulk insert with NOT EXISTS failed", ex);
+                        throw;
+                    }
+                }
+            }
+        }
+
+        public async Task BulkInsertAveragesToTableAsync(List<AverageRecord> records, string destinationTableName)
+        {
+            if (records == null || records.Count == 0) return;
+            if (string.IsNullOrEmpty(destinationTableName)) return;
+
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    try
+                    {
+                        string createStagingTable = $@"
+                            CREATE TABLE #StagingAverages (
+                                StationID INT,
+                                DeviceID INT,
+                                ParameterID INT,
+                                ParameterIDRef INT,
+                                Parametervalue FLOAT,
+                                SubIndex FLOAT,
+                                Type VARCHAR(50),
+                                Interval DATETIME,
+                                LoggerFlags INT,
+                                TypeID INT,
+                                CreatedTime DATETIME
+                            )";
+
+                        using (var cmd = new SqlCommand(createStagingTable, connection, transaction))
+                        {
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+
+                        var dataTable = ConvertToAverageDataTable(records);
+                        using (var bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction))
+                        {
+                            bulkCopy.DestinationTableName = "#StagingAverages";
+                            bulkCopy.BatchSize = BatchSize;
+                            await bulkCopy.WriteToServerAsync(dataTable);
+                        }
+
+                        string insertQuery = $@"
+                            INSERT INTO {destinationTableName} (
+                                StationID, DeviceID, ParameterID, ParameterIDRef,
+                                Parametervalue, SubIndex, Type, Interval,
+                                LoggerFlags, TypeID, CreatedTime
+                            )
+                            SELECT 
+                                s.StationID, s.DeviceID, s.ParameterID, s.ParameterIDRef,
+                                s.Parametervalue, s.SubIndex, s.Type, s.Interval,
+                                s.LoggerFlags, s.TypeID, s.CreatedTime
+                            FROM #StagingAverages s
+                            LEFT JOIN {destinationTableName} t ON
+                                s.StationID = t.StationID AND
+                                s.DeviceID = t.DeviceID AND
+                                s.ParameterID = t.ParameterID AND
+                                s.Interval = t.Interval AND
+                                s.TypeID = t.TypeID
+                            WHERE t.ID IS NULL";
+
+                        int rowsInserted;
+                        using (var cmd = new SqlCommand(insertQuery, connection, transaction))
+                        {
+                            cmd.CommandTimeout = 300;
+                            rowsInserted = await cmd.ExecuteNonQueryAsync();
+                        }
+
+                        transaction.Commit();
+                        _log.Info($"Bulk inserted {rowsInserted} records into {destinationTableName}");
+                    }
+                    catch (Exception ex)
+                    {
+                        transaction.Rollback();
+                        _log.Error($"Bulk insert to {destinationTableName} failed", ex);
                         throw;
                     }
                 }

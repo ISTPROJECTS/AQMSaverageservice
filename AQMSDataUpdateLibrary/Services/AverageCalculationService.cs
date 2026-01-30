@@ -24,6 +24,9 @@ namespace AQMSDataUpdateLibrary.Services
         private readonly IBulkDataWriter _bulkWriter;
         private readonly IAQICalculator _aqiCalculator;
         private readonly string _connectionString;
+        private readonly string _averageTableName;
+        private readonly string _averageTableNameMonth;
+        private readonly string _averageTableNameYear;
         private readonly int _defaultInterval;
         private readonly string _winddirection;
         private readonly string _rain;
@@ -35,6 +38,9 @@ namespace AQMSDataUpdateLibrary.Services
             IBulkDataWriter bulkWriter,
             IAQICalculator aqiCalculator,
             string connectionString,
+            string averageTableName,
+            string averageTableNameMonth,
+            string averageTableNameYear,
             int defaultInterval,
             string winddirection,
             string rain)
@@ -43,6 +49,9 @@ namespace AQMSDataUpdateLibrary.Services
             _bulkWriter = bulkWriter;
             _aqiCalculator = aqiCalculator;
             _connectionString = connectionString;
+            _averageTableName = averageTableName;
+            _averageTableNameMonth = averageTableNameMonth;
+            _averageTableNameYear = averageTableNameYear;
             _defaultInterval = defaultInterval;
             _winddirection = winddirection;
             _rain = rain;
@@ -618,21 +627,196 @@ namespace AQMSDataUpdateLibrary.Services
         public async Task<bool> CalculateMonthlyAveragesAsync()
         {
             _log.Info("Starting monthly average calculation");
-            
-            // Implementation similar to yearly, aggregating from daily averages
-            // Left as exercise - follows same pattern as yearly
-            
-            return true;
+
+            try
+            {
+                if (string.IsNullOrEmpty(_averageTableNameMonth))
+                {
+                    _log.Warn("AverageTableNameMonth is not configured; skipping monthly averages");
+                    return true;
+                }
+
+                // Aggregate hourly (TypeID=60) data from main ParameterAverages by month
+                // Only include complete months (month has ended)
+                var monthlyRecords = await GetMonthlyAggregatesAsync();
+                if (monthlyRecords.Count == 0)
+                {
+                    _log.Info("No monthly averages to insert");
+                    return true;
+                }
+
+                await _bulkWriter.BulkInsertAveragesToTableAsync(monthlyRecords, _averageTableNameMonth);
+                _log.Info($"Inserted {monthlyRecords.Count} monthly average records");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _errorLog.Error("Error calculating monthly averages", ex);
+                return false;
+            }
         }
 
         public async Task<bool> CalculateYearlyAveragesAsync()
         {
             _log.Info("Starting yearly average calculation");
-            
-            // Implementation would aggregate from monthly averages
-            // Left as exercise - follows same pattern as monthly
-            
-            return true;
+
+            try
+            {
+                if (string.IsNullOrEmpty(_averageTableNameYear))
+                {
+                    _log.Warn("AverageTableNameYear is not configured; skipping yearly averages");
+                    return true;
+                }
+
+                // Aggregate from monthly table (or hourly) by year
+                var yearlyRecords = await GetYearlyAggregatesAsync();
+                if (yearlyRecords.Count == 0)
+                {
+                    _log.Info("No yearly averages to insert");
+                    return true;
+                }
+
+                await _bulkWriter.BulkInsertAveragesToTableAsync(yearlyRecords, _averageTableNameYear);
+                _log.Info($"Inserted {yearlyRecords.Count} yearly average records");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _errorLog.Error("Error calculating yearly averages", ex);
+                return false;
+            }
+        }
+
+        private async Task<List<AverageRecord>> GetMonthlyAggregatesAsync()
+        {
+            var records = new List<AverageRecord>();
+            var startOfCurrentMonth = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
+
+            // Aggregate hourly data (TypeID=60) by month; only complete months
+            string query = $@"
+                SELECT 
+                    pa.StationID,
+                    pa.DeviceID,
+                    pa.ParameterID,
+                    MAX(pa.ParameterIDRef) AS ParameterIDRef,
+                    DATEADD(MONTH, DATEDIFF(MONTH, 0, pa.Interval), 0) AS MonthInterval,
+                    AVG(pa.Parametervalue) AS AvgValue,
+                    AVG(pa.SubIndex) AS AvgSubIndex,
+                    MIN(pa.LoggerFlags) AS LoggerFlags
+                FROM {_averageTableName} pa WITH (NOLOCK)
+                WHERE pa.TypeID = @HourlyTypeID
+                  AND pa.Parametervalue IS NOT NULL
+                  AND DATEADD(MONTH, DATEDIFF(MONTH, 0, pa.Interval), 0) < @StartOfCurrentMonth
+                  AND NOT EXISTS (
+                      SELECT 1 FROM {_averageTableNameMonth} m WITH (NOLOCK)
+                      WHERE m.StationID = pa.StationID
+                        AND m.DeviceID = pa.DeviceID
+                        AND m.ParameterID = pa.ParameterID
+                        AND m.Interval = DATEADD(MONTH, DATEDIFF(MONTH, 0, pa.Interval), 0)
+                        AND m.TypeID = @MonthTypeID
+                  )
+                GROUP BY pa.StationID, pa.DeviceID, pa.ParameterID,
+                         DATEADD(MONTH, DATEDIFF(MONTH, 0, pa.Interval), 0)";
+
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+                using (var cmd = new SqlCommand(query, connection))
+                {
+                    cmd.Parameters.AddWithValue("@HourlyTypeID", AQIConstants.OneHourTypeID);
+                    cmd.Parameters.AddWithValue("@StartOfCurrentMonth", startOfCurrentMonth);
+                    cmd.Parameters.AddWithValue("@MonthTypeID", AQIConstants.MonthTypeID);
+
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            records.Add(new AverageRecord
+                            {
+                                StationID = reader.GetInt32(0),
+                                DeviceID = reader.GetInt32(1),
+                                ParameterID = reader.GetInt32(2),
+                                ParameterIDRef = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3),
+                                Interval = reader.GetDateTime(4),
+                                ParameterValue = reader.IsDBNull(5) ? (double?)null : reader.GetDouble(5),
+                                SubIndex = reader.IsDBNull(6) ? (double?)null : reader.GetDouble(6),
+                                LoggerFlags = reader.IsDBNull(7) ? (int?)null : reader.GetInt32(7),
+                                TypeID = AQIConstants.MonthTypeID,
+                                Type = "MONTH",
+                                CreatedTime = DateTime.Now
+                            });
+                        }
+                    }
+                }
+            }
+
+            return records;
+        }
+
+        private async Task<List<AverageRecord>> GetYearlyAggregatesAsync()
+        {
+            var records = new List<AverageRecord>();
+            var startOfCurrentYear = new DateTime(DateTime.Now.Year, 1, 1);
+
+            // Prefer aggregating from monthly table if we have data; otherwise from hourly
+            string query = $@"
+                SELECT 
+                    pa.StationID,
+                    pa.DeviceID,
+                    pa.ParameterID,
+                    MAX(pa.ParameterIDRef) AS ParameterIDRef,
+                    DATEADD(YEAR, DATEDIFF(YEAR, 0, pa.Interval), 0) AS YearInterval,
+                    AVG(pa.Parametervalue) AS AvgValue,
+                    AVG(pa.SubIndex) AS AvgSubIndex,
+                    MIN(pa.LoggerFlags) AS LoggerFlags
+                FROM {_averageTableName} pa WITH (NOLOCK)
+                WHERE pa.TypeID = @HourlyTypeID
+                  AND pa.Parametervalue IS NOT NULL
+                  AND DATEADD(YEAR, DATEDIFF(YEAR, 0, pa.Interval), 0) < @StartOfCurrentYear
+                  AND NOT EXISTS (
+                      SELECT 1 FROM {_averageTableNameYear} y WITH (NOLOCK)
+                      WHERE y.StationID = pa.StationID
+                        AND y.DeviceID = pa.DeviceID
+                        AND y.ParameterID = pa.ParameterID
+                        AND y.Interval = DATEADD(YEAR, DATEDIFF(YEAR, 0, pa.Interval), 0)
+                        AND y.TypeID = @YearTypeID
+                  )
+                GROUP BY pa.StationID, pa.DeviceID, pa.ParameterID,
+                         DATEADD(YEAR, DATEDIFF(YEAR, 0, pa.Interval), 0)";
+
+            using (var connection = new SqlConnection(_connectionString))
+            {
+                await connection.OpenAsync();
+                using (var cmd = new SqlCommand(query, connection))
+                {
+                    cmd.Parameters.AddWithValue("@HourlyTypeID", AQIConstants.OneHourTypeID);
+                    cmd.Parameters.AddWithValue("@StartOfCurrentYear", startOfCurrentYear);
+                    cmd.Parameters.AddWithValue("@YearTypeID", AQIConstants.YearTypeID);
+
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            records.Add(new AverageRecord
+                            {
+                                StationID = reader.GetInt32(0),
+                                DeviceID = reader.GetInt32(1),
+                                ParameterID = reader.GetInt32(2),
+                                ParameterIDRef = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3),
+                                Interval = reader.GetDateTime(4),
+                                ParameterValue = reader.IsDBNull(5) ? (double?)null : reader.GetDouble(5),
+                                SubIndex = reader.IsDBNull(6) ? (double?)null : reader.GetDouble(6),
+                                LoggerFlags = reader.IsDBNull(7) ? (int?)null : reader.GetInt32(7),
+                                TypeID = AQIConstants.YearTypeID,
+                                Type = "YEAR",
+                                CreatedTime = DateTime.Now
+                            });
+                        }
+                    }
+                }
+            }
+
+            return records;
         }
 
         private async Task AverageAQIFromHourlyDataAsync(

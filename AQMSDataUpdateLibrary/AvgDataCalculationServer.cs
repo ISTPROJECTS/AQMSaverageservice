@@ -89,6 +89,9 @@ namespace AQMSDataUpdateLibrary
                 _bulkWriter,
                 _aqiCalculator,
                 _connectionString,
+                _averageTableName,
+                _averageTableNameMonth,
+                _averageTableNameYear,
                 _defaultInterval,
                 _winddirection,
                 _rain);
