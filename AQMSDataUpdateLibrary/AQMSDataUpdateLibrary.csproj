@@ -82,7 +82,6 @@
     <Compile Include="AvgDataCalculationServer.cs" />
     <Compile Include="Log.cs" />
     <Compile Include="Models\Parametersamplings.cs" />
-    <Compile Include="obj\Debug\.NETFramework,Version=v4.7.2.AssemblyAttributes.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
