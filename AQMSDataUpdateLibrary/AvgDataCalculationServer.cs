@@ -1467,11 +1467,9 @@ ORDER BY
             bool blnYearAverage = InsertParameterAvgDataYear(sqlConnectionString);
 
             bool blnSiteDayAverage = InsertSiteParameterAvgDataDay(sqlConnectionString);
-            bool blnSiteMonthAverage = InsertSiteParameterAvgDataMonth(sqlConnectionString);
-            bool blnSiteYearAverage = InsertSiteParameterAvgDataYear(sqlConnectionString);
 
             bool finalStatus = allDevicesSuccess && blnMonthAverage && blnYearAverage
-                               && blnSiteDayAverage && blnSiteMonthAverage && blnSiteYearAverage;
+                               && blnSiteDayAverage;
 
             if (!finalStatus)
             {
@@ -2602,14 +2600,21 @@ ORDER BY
 
         private void WriteToLogTable(SqlConnection conObj, string logDesc, string logSource)
         {
-            string query1 = $"Insert into {logTableName}(LogDescription,LogSource,LogState,LogTime) VALUES(@LogDesc,@LogSource,@LogState,@LogTime)";
-            SqlCommand cmdsuccess = new SqlCommand(query1, conObj);
-            cmdsuccess.Parameters.Clear();
-            cmdsuccess.Parameters.AddWithValue("@LogDesc", logDesc);
-            cmdsuccess.Parameters.AddWithValue("@LogSource", logSource);
-            cmdsuccess.Parameters.AddWithValue("@LogState", 1);
-            cmdsuccess.Parameters.AddWithValue("@LogTime", DateTime.Now);
-            cmdsuccess.ExecuteNonQuery();
+            try
+            {
+                string query1 = $"Insert into {logTableName}(LogDescription,LogSource,LogState,LogTime) VALUES(@LogDesc,@LogSource,@LogState,@LogTime)";
+                SqlCommand cmdsuccess = new SqlCommand(query1, conObj);
+                cmdsuccess.Parameters.Clear();
+                cmdsuccess.Parameters.AddWithValue("@LogDesc", logDesc);
+                cmdsuccess.Parameters.AddWithValue("@LogSource", logSource);
+                cmdsuccess.Parameters.AddWithValue("@LogState", 1);
+                cmdsuccess.Parameters.AddWithValue("@LogTime", DateTime.Now);
+                cmdsuccess.ExecuteNonQuery();
+            }
+            catch (Exception logEx)
+            {
+                ErrorLog.Error($"WriteToLogTable failed (table={logTableName}, source={logSource}): {logEx.Message}");
+            }
         }
         private void UpdateReadingsTableRowStatus(SqlCommand cmd, DataRow row)
         {
@@ -2638,12 +2643,21 @@ ORDER BY
             SqlConnection ConObj = new SqlConnection(sqlConnectionString);
             try
             {
+                Log.Info($"InsertSiteParameterAvgDataDay started. siteAverageTableName={siteAverageTableName}, averageTableName={averageTableName}, parameterTableName={parameterTableName}");
+                if (string.IsNullOrEmpty(siteAverageTableName))
+                {
+                    ErrorLog.Error("InsertSiteParameterAvgDataDay: siteAverageTableName is null or empty — check App.config key 'SiteAverageTableName'");
+                    return false;
+                }
                 if (ConObj.State != ConnectionState.Open)
                     ConObj.Open();
 
+                // Process last 7 days — covers today + up to 6 days of downtime gap.
+                // Backfill for older gaps must be done via the backfill SQL script.
                 SqlCommand cmd = new SqlCommand(string.Empty, ConObj);
+                cmd.CommandTimeout = 300; // 5 minutes
 
-                // UPDATE existing rows
+                // UPDATE existing rows (last 7 days only)
                 cmd.CommandText = $@"
                     UPDATE {siteAverageTableName}
                     SET
@@ -2664,6 +2678,7 @@ ORDER BY
                         INNER JOIN DMN_Devices d ON pa.DeviceID = d.DeviceId AND d.IsDeleted = 0
                         WHERE pa.TypeID = 1440
                           AND pa.Parametervalue IS NOT NULL
+                          AND pa.Interval >= CAST(DATEADD(DAY, -7, GETDATE()) AS DATE)
                         GROUP BY
                             pa.StationID,
                             p.ParameterName,
@@ -2677,7 +2692,7 @@ ORDER BY
                 ";
                 cmd.ExecuteNonQuery();
 
-                // INSERT new rows
+                // INSERT new rows (last 7 days only)
                 cmd.CommandText = $@"
                     INSERT INTO {siteAverageTableName}
                         (StationID, ParameterName, Parametervalue, SubIndex, TypeID, Type, Interval, DeviceCount, CreatedTime)
@@ -2704,6 +2719,7 @@ ORDER BY
                         INNER JOIN DMN_Devices d ON pa.DeviceID = d.DeviceId AND d.IsDeleted = 0
                         WHERE pa.TypeID = 1440
                           AND pa.Parametervalue IS NOT NULL
+                          AND pa.Interval >= CAST(DATEADD(DAY, -7, GETDATE()) AS DATE)
                         GROUP BY
                             pa.StationID,
                             p.ParameterName,
@@ -2719,10 +2735,8 @@ ORDER BY
                 ";
                 cmd.ExecuteNonQuery();
 
-                // Stamp MainPollutant on every day row this tick.
-                // Mirrors device chart logic: parameter with highest Parametervalue
-                // among shouldUseForAqi=1 parameters (excluding 'AQI Index').
-                // SubIndex is used as primary sort when available; Parametervalue as fallback.
+                // Stamp MainPollutant for last 7 days only.
+                // Mirrors device chart logic: parameter with highest SubIndex, Parametervalue as fallback.
                 cmd.CommandText = $@"
                     UPDATE tgt
                     SET tgt.MainPollutant = best.ParameterName,
@@ -2741,11 +2755,13 @@ ORDER BY
                         WHERE TypeID          = 14440
                           AND Parametervalue  IS NOT NULL
                           AND ParameterName   != 'AQI Index'
+                          AND Interval        >= CAST(DATEADD(DAY, -7, GETDATE()) AS DATE)
                     ) best
                         ON  best.StationID = tgt.StationID
                         AND best.Interval  = tgt.Interval
                         AND best.rn        = 1
-                    WHERE tgt.TypeID = 14440;
+                    WHERE tgt.TypeID = 14440
+                      AND tgt.Interval >= CAST(DATEADD(DAY, -7, GETDATE()) AS DATE);
                 ";
                 cmd.ExecuteNonQuery();
 
@@ -2765,213 +2781,7 @@ ORDER BY
             return blnStatus;
         }
 
-        /// <summary>
-        /// 1-Month Site Average (TypeID=43200)
-        /// Source: SiteParameterAverages (TypeID=14440) — site daily averages
-        /// Running update every 5-min tick — recalculates from accumulating daily rows.
-        /// </summary>
-        public bool InsertSiteParameterAvgDataMonth(string sqlConnectionString)
-        {
-            bool blnStatus = false;
-            SqlConnection ConObj = new SqlConnection(sqlConnectionString);
-            try
-            {
-                if (ConObj.State != ConnectionState.Open)
-                    ConObj.Open();
 
-                SqlCommand cmd = new SqlCommand(string.Empty, ConObj);
-
-                // UPDATE existing monthly rows
-                cmd.CommandText = $@"
-                    UPDATE {siteAverageTableName}
-                    SET
-                        Parametervalue = src.AvgValue,
-                        SubIndex       = src.AvgSubIndex,
-                        DeviceCount    = src.DeviceCount,
-                        ModifiedOn     = GETDATE()
-                    FROM (
-                        SELECT
-                            spa.StationID,
-                            spa.ParameterName,
-                            CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, spa.Interval), 0) AS DATETIME) AS MonthStart,
-                            AVG(spa.Parametervalue)  AS AvgValue,
-                            AVG(spa.SubIndex)        AS AvgSubIndex,
-                            AVG(spa.DeviceCount)     AS DeviceCount
-                        FROM {siteAverageTableName} spa
-                        WHERE spa.TypeID = 14440
-                          AND spa.Parametervalue IS NOT NULL
-                        GROUP BY
-                            spa.StationID,
-                            spa.ParameterName,
-                            CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, spa.Interval), 0) AS DATETIME)
-                    ) src
-                    INNER JOIN {siteAverageTableName} tgt
-                        ON  tgt.StationID     = src.StationID
-                        AND tgt.ParameterName = src.ParameterName
-                        AND tgt.TypeID        = 43200
-                        AND tgt.Interval      = src.MonthStart;
-                ";
-                cmd.ExecuteNonQuery();
-
-                // INSERT new monthly rows
-                cmd.CommandText = $@"
-                    INSERT INTO {siteAverageTableName}
-                        (StationID, ParameterName, Parametervalue, SubIndex, TypeID, Type, Interval, DeviceCount, CreatedTime)
-                    SELECT
-                        src.StationID,
-                        src.ParameterName,
-                        src.AvgValue,
-                        src.AvgSubIndex,
-                        43200,
-                        '43200-MO',
-                        src.MonthStart,
-                        src.DeviceCount,
-                        GETDATE()
-                    FROM (
-                        SELECT
-                            spa.StationID,
-                            spa.ParameterName,
-                            CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, spa.Interval), 0) AS DATETIME) AS MonthStart,
-                            AVG(spa.Parametervalue)  AS AvgValue,
-                            AVG(spa.SubIndex)        AS AvgSubIndex,
-                            AVG(spa.DeviceCount)     AS DeviceCount
-                        FROM {siteAverageTableName} spa
-                        WHERE spa.TypeID = 14440
-                          AND spa.Parametervalue IS NOT NULL
-                        GROUP BY
-                            spa.StationID,
-                            spa.ParameterName,
-                            CAST(DATEADD(MONTH, DATEDIFF(MONTH, 0, spa.Interval), 0) AS DATETIME)
-                    ) src
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM {siteAverageTableName} tgt
-                        WHERE  tgt.StationID     = src.StationID
-                          AND  tgt.ParameterName = src.ParameterName
-                          AND  tgt.TypeID        = 43200
-                          AND  tgt.Interval      = src.MonthStart
-                    );
-                ";
-                cmd.ExecuteNonQuery();
-
-                WriteToLogTable(ConObj, "Site monthly averages inserted/updated", "InsertSiteMonth");
-                blnStatus = true;
-            }
-            catch (Exception ex)
-            {
-                ErrorLog.Error("An error occurred in InsertSiteParameterAvgDataMonth", ex);
-                if (ConObj.State == ConnectionState.Open)
-                    WriteToLogTable(ConObj, ex.Message, "Exception");
-            }
-            finally
-            {
-                if (ConObj != null) { ConObj.Close(); ConObj.Dispose(); }
-            }
-            return blnStatus;
-        }
-
-        /// <summary>
-        /// 1-Year Site Average (TypeID=365)
-        /// Source: SiteParameterAverages (TypeID=43200) — site monthly averages
-        /// Running update every 5-min tick — recalculates from accumulating monthly rows.
-        /// </summary>
-        public bool InsertSiteParameterAvgDataYear(string sqlConnectionString)
-        {
-            bool blnStatus = false;
-            SqlConnection ConObj = new SqlConnection(sqlConnectionString);
-            try
-            {
-                if (ConObj.State != ConnectionState.Open)
-                    ConObj.Open();
-
-                SqlCommand cmd = new SqlCommand(string.Empty, ConObj);
-
-                // UPDATE existing yearly rows
-                cmd.CommandText = $@"
-                    UPDATE {siteAverageTableName}
-                    SET
-                        Parametervalue = src.AvgValue,
-                        SubIndex       = src.AvgSubIndex,
-                        DeviceCount    = src.DeviceCount,
-                        ModifiedOn     = GETDATE()
-                    FROM (
-                        SELECT
-                            spa.StationID,
-                            spa.ParameterName,
-                            CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, spa.Interval), 0) AS DATETIME) AS YearStart,
-                            AVG(spa.Parametervalue)  AS AvgValue,
-                            AVG(spa.SubIndex)        AS AvgSubIndex,
-                            AVG(spa.DeviceCount)     AS DeviceCount
-                        FROM {siteAverageTableName} spa
-                        WHERE spa.TypeID = 43200
-                          AND spa.Parametervalue IS NOT NULL
-                        GROUP BY
-                            spa.StationID,
-                            spa.ParameterName,
-                            CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, spa.Interval), 0) AS DATETIME)
-                    ) src
-                    INNER JOIN {siteAverageTableName} tgt
-                        ON  tgt.StationID     = src.StationID
-                        AND tgt.ParameterName = src.ParameterName
-                        AND tgt.TypeID        = 365
-                        AND tgt.Interval      = src.YearStart;
-                ";
-                cmd.ExecuteNonQuery();
-
-                // INSERT new yearly rows
-                cmd.CommandText = $@"
-                    INSERT INTO {siteAverageTableName}
-                        (StationID, ParameterName, Parametervalue, SubIndex, TypeID, Type, Interval, DeviceCount, CreatedTime)
-                    SELECT
-                        src.StationID,
-                        src.ParameterName,
-                        src.AvgValue,
-                        src.AvgSubIndex,
-                        365,
-                        '365-Y',
-                        src.YearStart,
-                        src.DeviceCount,
-                        GETDATE()
-                    FROM (
-                        SELECT
-                            spa.StationID,
-                            spa.ParameterName,
-                            CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, spa.Interval), 0) AS DATETIME) AS YearStart,
-                            AVG(spa.Parametervalue)  AS AvgValue,
-                            AVG(spa.SubIndex)        AS AvgSubIndex,
-                            AVG(spa.DeviceCount)     AS DeviceCount
-                        FROM {siteAverageTableName} spa
-                        WHERE spa.TypeID = 43200
-                          AND spa.Parametervalue IS NOT NULL
-                        GROUP BY
-                            spa.StationID,
-                            spa.ParameterName,
-                            CAST(DATEADD(YEAR, DATEDIFF(YEAR, 0, spa.Interval), 0) AS DATETIME)
-                    ) src
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM {siteAverageTableName} tgt
-                        WHERE  tgt.StationID     = src.StationID
-                          AND  tgt.ParameterName = src.ParameterName
-                          AND  tgt.TypeID        = 365
-                          AND  tgt.Interval      = src.YearStart
-                    );
-                ";
-                cmd.ExecuteNonQuery();
-
-                WriteToLogTable(ConObj, "Site yearly averages inserted/updated", "InsertSiteYear");
-                blnStatus = true;
-            }
-            catch (Exception ex)
-            {
-                ErrorLog.Error("An error occurred in InsertSiteParameterAvgDataYear", ex);
-                if (ConObj.State == ConnectionState.Open)
-                    WriteToLogTable(ConObj, ex.Message, "Exception");
-            }
-            finally
-            {
-                if (ConObj != null) { ConObj.Close(); ConObj.Dispose(); }
-            }
-            return blnStatus;
-        }
 
     }
 }
